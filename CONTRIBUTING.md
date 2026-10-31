@@ -9,7 +9,7 @@ Dieses Projekt steht unter der **[PolyForm Noncommercial License 1.0.0](https://
 - **Erlaubt:** nichtkommerzielle Nutzung, Anpassung und Weitergabe (z. B. Vereine, Hobby, Bildung).
 - **Nicht erlaubt:** Verkauf der Software bzw. kommerzielle Weiterverbreitung.
 
-Mit einem Beitrag bestätigst du, dass deine Änderungen unter derselben Lizenz veröffentlicht werden dürfen. Copyright-Inhaber: **Marlon Müller**.
+Mit einem Beitrag bestätigst du, dass deine Änderungen unter derselben Lizenz veröffentlicht werden dürfen. Copyright liegt bei den Beitragenden (siehe Required Notice in [`LICENSE`](LICENSE)).
 
 ## Issues melden
 

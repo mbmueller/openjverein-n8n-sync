@@ -25,7 +25,7 @@
 
 /* global Java, Packages, events, JavaAdapter */
 
-var SYNC_ROOT = ""; // z. B. "C:\\Users\\Marlon\\openjverein-n8n-sync" oder "/home/verein/…"
+var SYNC_ROOT = ""; // z. B. "C:\\Users\\<username>\\openjverein-n8n-sync" oder "/home/verein/…"
 
 /**
  * Start-Outbox: true = detached Retry nach Boot-Verzögerung; false = nur Exit-Export.
