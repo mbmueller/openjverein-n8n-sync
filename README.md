@@ -6,21 +6,22 @@ Synchronisiert die Zusatzfelder **`insta`**, **`website`**, **`flyer`** (Ja/Nein
 
 **Lizenz:** [PolyForm Noncommercial 1.0.0](LICENSE) — frei nutzbar, änderbar und weitergebbar **nichtkommerziell**; **kein Verkauf** der Software. Details und Mitwirken: [CONTRIBUTING.md](CONTRIBUTING.md).
 
-**Trigger:** nur beim **Start und/oder Exit** von Jameica (Wrapper). Kein Cron, kein Task Scheduler. Fehlgeschlagene Uploads landen in `outbox/` und werden beim **nächsten** Start/Exit erneut versucht.
+**Trigger:** Jameicas eingebautes **Scripting** (Start- und Shutdown-Hook). Jameica wird **normal** gestartet — **kein** Wrapper um die Binary nötig. Kein Cron, kein Task Scheduler. Fehlgeschlagene Uploads landen in `outbox/` und werden beim **nächsten** Start/Exit erneut versucht.
 
 ## Architektur (kurz)
 
-1. Wrapper startet Jameica (optional: Outbox flushen).
-2. Nach sauberem Exit: Exporter liest H2 **readonly** (Datei entsperrt, kein `AUTO_SERVER`).
-3. Filter: nur **aktive** Mitglieder (`austritt` leer) mit **mindestens einer** Einwilligung.
-4. Schreibt `einwilligungen.json` + `.csv`, POSTet an n8n (`X-Webhook-Secret`).
-5. n8n legt Dateien unter Drive `aktuell/` und datiertem `archiv/` ab (optional `meta/last-sync.json`).
+1. In Jameica registriertes Script (`scripts/jameica-openjverein-sync.js`) läuft nach dem Start und lauscht auf Beenden.
+2. **Start:** nur Outbox → n8n flushen (H2 oft noch gesperrt).
+3. **Sauberes Beenden:** detachter Exit-Export wartet auf Prozessende, liest H2 **readonly** (kein `AUTO_SERVER`).
+4. Filter: nur **aktive** Mitglieder (`austritt` leer) mit **mindestens einer** Einwilligung.
+5. Schreibt `einwilligungen.json` + `.csv`, POSTet an n8n (`X-Webhook-Secret`).
+6. n8n legt Dateien unter Drive `aktuell/` und datiertem `archiv/` ab (optional `meta/last-sync.json`).
 
 Kill/Absturz/Stromausfall: Exit-Hook kann ausbleiben → Drive behält den **letzten erfolgreichen Sync**. Das ist **OK**.
 
 ## Voraussetzungen
 
-- Jameica / OpenJVerein lokal
+- Jameica / OpenJVerein lokal (mit JavaScript-Engine: Nashorn/Rhino — bei aktuellen Jameica-Builds üblich)
 - Python 3.10+ und Java (für H2-JDBC via JayDeBeApi)
 - Erreichbare n8n-Instanz (Webhook + Google-Drive-Credential **in n8n**)
 - H2-JDBC-JAR (oft bei Jameica/OpenJVerein mitgeliefert)
@@ -34,8 +35,8 @@ python3 -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r exporter/requirements.txt
 cp .env.example .env
-# .env ausfüllen: N8N_*, JAMEICA_BIN, H2_DB_PATH, H2_JDBC_JAR
-chmod +x wrapper/jameica-wrapper.sh
+# .env ausfüllen: N8N_*, H2_DB_PATH, H2_JDBC_JAR
+chmod +x scripts/export-trigger.sh
 ```
 
 ### Wichtige `.env`-Platzhalter
@@ -44,48 +45,55 @@ chmod +x wrapper/jameica-wrapper.sh
 |----------|-----------|
 | `N8N_WEBHOOK_URL` | z. B. `https://<dein-n8n>/webhook/einwilligung-bildnutzung` |
 | `N8N_WEBHOOK_SECRET` | gemeinsames Secret; Header `X-Webhook-Secret` |
-| `JAMEICA_BIN` | Pfad zu `jameica.sh` / `.exe` |
 | `H2_DB_PATH` | H2-Datei **ohne** `.mv.db`-Suffix |
 | `H2_JDBC_JAR` | Pfad zur `h2-*.jar` |
-| `FLUSH_OUTBOX_ON_START` | `1` = vor Start nur Outbox flushen |
+| `OPENJVEREIN_N8N_SYNC_ROOT` | optional: absoluter Repo-Pfad (sonst `SYNC_ROOT` in der `.js`) |
+| `EXIT_H2_SETTLE_SECONDS` | Pause nach Exit vor H2-Öffnen (Default `2`) |
 
 Keine echten Secrets ins Git committen.
 
-## Wrapper lokal nutzen
+## Jameica-Script installieren (Primärweg)
 
-**Linux/macOS** — statt Jameica direkt den Wrapper starten:
+Jameica bringt unter **Datei → Einstellungen → Scripting** eine Liste registrierter Script-Dateien mit. Beim Start werden sie ausgeführt; darin kann man auf System-Events (u. a. Beenden) reagieren.
 
-```bash
-./wrapper/jameica-wrapper.sh
-# optional Argumente an Jameica durchreichen:
-./wrapper/jameica-wrapper.sh --irgendwas
-```
+### Einmalig einrichten
 
-**Windows:**
+1. Repo wie oben klonen, `.env` ausfüllen, `scripts/export-trigger.sh` ausführbar machen (Linux/macOS).
+2. Datei `scripts/jameica-openjverein-sync.js` öffnen und **`SYNC_ROOT`** auf den **absoluten** Pfad dieses Repos setzen  
+   *oder* die Umgebungsvariable `OPENJVEREIN_N8N_SYNC_ROOT` setzen (z. B. in der Shell, aus der Jameica startet, bzw. systemweit).
+3. Jameica **normal** starten (`jameica.sh` / `jameica-win64.exe` / App — **nicht** den alten Wrapper).
+4. Menü **Datei → Einstellungen** öffnen, Reiter **Scripting**.
+5. **Script hinzufügen…** → `…/openjverein-n8n-sync/scripts/jameica-openjverein-sync.js` wählen.
+6. Einstellungen speichern. Beim nächsten Start (oder nach Reload der Scripts) ist der Hook aktiv.
+7. Zum Testen: Jameica **über Datei → Beenden** sauber schließen und prüfen, ob `output/einwilligungen.*` entsteht und der n8n-Webhook ankommt.
 
-```cmd
-wrapper\jameica-wrapper.cmd
-```
-
-oder:
-
-```powershell
-.\wrapper\jameica-wrapper.ps1
-```
-
-Ablauf:
+### Was wann läuft
 
 | Zeitpunkt | Aktion |
 |-----------|--------|
-| Vor Start (`FLUSH_OUTBOX_ON_START=1`) | Nur Outbox → n8n (H2 oft noch gesperrt) |
-| Nach Exit | Full-Export aus H2 + Outbox-Retry + POST |
+| Nach Jameica-Start (Script-Load) | Outbox → n8n (`scripts/export-trigger.sh start`) |
+| Bei `SYSTEM_SHUTDOWN` (sauberes Beenden) | Detachter Exit-Export: wartet auf PID-Ende, dann Full-Export |
 
-Exporter manuell (z. B. Test nach Exit, wenn Jameica bereits zu ist):
+**Hinweis macOS:** Beenden über den roten Fensterknopf oder **Datei → Beenden**, damit Shutdown-Hooks laufen (nicht Cmd+Q).
+
+### Manueller Test ohne Jameica
 
 ```bash
+./scripts/export-trigger.sh start          # nur Outbox
+./scripts/export-trigger.sh exit           # Full-Export (Jameica sollte zu sein)
 python exporter/export.py --trigger jameica_exit
-python exporter/export.py --flush-only   # nur Outbox
 ```
+
+Windows:
+
+```cmd
+scripts\export-trigger.cmd start
+scripts\export-trigger.cmd exit
+```
+
+## Optional: Wrapper (deprecated)
+
+Nur falls Scripting nicht nutzbar ist. Startet Jameica blockierend und ruft danach denselben `export-trigger` auf — **nicht** empfohlen, weil man die Jameica-Binary wrappen müsste. Details: [`wrapper/README.md`](wrapper/README.md).
 
 ## n8n-Workflow importieren
 
@@ -129,4 +137,5 @@ Dieses Repo ist **publishbar**: keine echten Hosts, Tokens oder DB-Pfade.
 
 - Primärpfad ist **nach Exit** (H2 freigegeben). Parallel-JDBC bei laufendem Jameica wird vermieden.
 - Filter „≥1 Einwilligung“ sitzt im Exporter; n8n wiederholt ihn als Sicherheitsnetz.
-- Kein täglicher Zeitplan: Sync und Outbox-Retry nur über den Wrapper bei Start/Exit.
+- Kein täglicher Zeitplan: Sync und Outbox-Retry nur über Jameica-Scripts bei Start/Exit.
+- Hintergrund: Jameica `ScriptingService` — Scripts unter Einstellungen → Scripting; Auswertung nach `SYSTEM_STARTED`; Shutdown über Message `SYSTEM_SHUTDOWN`.

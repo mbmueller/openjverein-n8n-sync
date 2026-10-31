@@ -58,12 +58,19 @@ python exporter/export.py --trigger jameica_exit
 python exporter/export.py --flush-only
 ```
 
-**Wrapper** (startet Jameica und führt danach den Export aus):
+**Jameica-Script** (Primärweg — siehe README):
 
 ```bash
-chmod +x wrapper/jameica-wrapper.sh
+chmod +x scripts/export-trigger.sh
+# SYNC_ROOT in scripts/jameica-openjverein-sync.js setzen
+# In Jameica: Datei → Einstellungen → Scripting → Script hinzufügen
+./scripts/export-trigger.sh exit   # manueller Exit-Export-Test
+```
+
+**Wrapper** (optional/deprecated, nur Fallback):
+
+```bash
 ./wrapper/jameica-wrapper.sh
-# Windows: wrapper\jameica-wrapper.cmd  bzw.  .\wrapper\jameica-wrapper.ps1
 ```
 
 n8n-Workflow: `n8n/einwilligung-bildnutzung.json` importieren, Drive-Credential und Ordner-IDs **nur in der n8n-UI** setzen, Webhook-Secret an lokale `.env` anbinden.
