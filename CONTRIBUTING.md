@@ -58,16 +58,17 @@ python exporter/export.py --trigger jameica_exit
 python exporter/export.py --flush-only
 ```
 
-**Jameica-Script** (Primärweg — siehe README):
+**Exit-Export** (zuverlässig — siehe README „Zuverlässiger Exit-Trigger“):
 
 ```bash
 chmod +x scripts/export-trigger.sh
-# SYNC_ROOT in scripts/jameica-openjverein-sync.js setzen
-# In Jameica: Datei → Einstellungen → Scripting → Script hinzufügen
-./scripts/export-trigger.sh exit   # manueller Exit-Export-Test
+./scripts/export-trigger.sh exit   # nach Jameica-Ende / zum Test
+# Windows: scripts\export-trigger.cmd exit  (oder Desktop-Shortcut)
 ```
 
-**Wrapper** (optional/deprecated, nur Fallback):
+**Hang-Diagnose** (optional): Recovery → `minimal.js`; Sync-`.js` ist absichtlich leer — kein SYSTEM_SHUTDOWN in Scripting (hängt beim Eval).
+
+**Wrapper** (Launcher: Jameica blockierend, danach Export):
 
 ```bash
 ./wrapper/jameica-wrapper.sh

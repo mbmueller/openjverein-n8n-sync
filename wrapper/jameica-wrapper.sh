@@ -8,7 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 ENV_FILE="${ENV_FILE:-${REPO_ROOT}/.env}"
 
-echo "[wrapper] HINWEIS: deprecated — bitte Jameica Scripting nutzen (scripts/jameica-openjverein-sync.js)." >&2
+echo "[wrapper] Exit-Sync nach Jameica-Ende (zuverlässig ohne Scripting-Eval). Siehe README." >&2
 
 if [[ -f "${ENV_FILE}" ]]; then
   set -a

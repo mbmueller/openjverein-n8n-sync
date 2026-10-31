@@ -7,7 +7,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-Write-Host "[wrapper] HINWEIS: deprecated — bitte Jameica Scripting nutzen (scripts/jameica-openjverein-sync.js)." -ForegroundColor Yellow
+Write-Host "[wrapper] Exit-Sync nach Jameica-Ende (zuverlaessig ohne Scripting-Eval). Siehe README." -ForegroundColor Yellow
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot = Resolve-Path (Join-Path $ScriptDir "..")

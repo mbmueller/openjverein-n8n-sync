@@ -1,13 +1,16 @@
-# Wrapper (optional / deprecated)
+# Wrapper (zuverlässiger Fallback ohne Scripting-Eval)
 
-**Primärer Trigger ist Jameica Scripting** (`scripts/jameica-openjverein-sync.js`).  
-Jameica wird **normal** gestartet — die Binary muss **nicht** gewrappt werden.
+**Empfohlen**, wenn Jameica-Scripting beim Start hängt oder Custom-Scripts unzuverlässig sind (siehe Haupt-README: Recovery + Test mit `minimal.js`).
 
-Die Dateien in diesem Ordner bleiben nur als **optionaler Fallback** (z. B. wenn die JavaScript-Engine fehlt oder Scripting deaktiviert ist). Sie starten Jameica blockierend und führen danach den Exporter aus.
+Der Wrapper startet Jameica **blockierend** und ruft danach `scripts/export-trigger` mit `exit` auf — gleicher Export-Pfad wie ein Shortcut nach dem Beenden, nur in einem Launcher.
 
 ```bash
-# nur falls nötig — nicht der empfohlene Weg
+# Pfad zur Jameica-Binary in der Datei / Umgebung setzen
 ./wrapper/jameica-wrapper.sh
 ```
 
-Siehe Haupt-[README](../README.md) Abschnitt „Jameica-Script installieren“.
+Windows: `wrapper\jameica-wrapper.cmd` / `.ps1`.
+
+Optional bleibt die Sync-`.js` unter Einstellungen → Scripting **unregistriert**; Sync läuft trotzdem nach Exit über diesen Wrapper bzw. einen Desktop-Shortcut auf `export-trigger.cmd exit`.
+
+Haupt-[README](../README.md): Abschnitte „Zuverlässiger Exit-Trigger“ und „Jameica hängt beim Start?“.
