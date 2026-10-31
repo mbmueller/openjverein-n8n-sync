@@ -1,0 +1,300 @@
+{
+  "name": "Einwilligung Bildnutzung → Drive",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "einwilligung-bildnutzung",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "wh-einwilligung-001",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "webhookId": "einwilligung-bildnutzung-placeholder"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.headers['x-webhook-secret'] || $json.headers['X-Webhook-Secret'] }}",
+              "value2": "={{ $env.N8N_WEBHOOK_SECRET || 'CHANGE_ME_WEBHOOK_SECRET' }}"
+            }
+          ]
+        }
+      },
+      "id": "if-secret-001",
+      "name": "Secret prüfen",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"ok\": false, \"error\": \"unauthorized\" } }}",
+        "options": {
+          "responseCode": 401
+        }
+      },
+      "id": "resp-401-001",
+      "name": "401 Unauthorized",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [680, 480]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = items[0].json;\nconst body = raw.body && typeof raw.body === 'object' ? raw.body : raw;\n\nif (!body || typeof body !== 'object') {\n  throw new Error('Payload fehlt');\n}\nif (!Array.isArray(body.members)) {\n  throw new Error('members muss ein Array sein');\n}\nif (!Array.isArray(body.fields)) {\n  throw new Error('fields muss ein Array sein');\n}\n\nconst requiredFields = ['insta', 'website', 'flyer'];\nfor (const f of requiredFields) {\n  if (!body.fields.includes(f)) {\n    throw new Error(`Feld ${f} fehlt in fields`);\n  }\n}\n\n// Sicherheitsnetz: nur aktive Einträge mit ≥1 Einwilligung (Exporter filtert bereits)\nconst members = body.members.filter(m => m && (m.insta || m.website || m.flyer));\n\nconst exportedAt = body.exported_at || new Date().toISOString();\nconst day = String(exportedAt).slice(0, 10);\n\nconst payload = {\n  exported_at: exportedAt,\n  source: body.source || 'openjverein',\n  trigger: body.trigger || 'unknown',\n  fields: body.fields,\n  members,\n};\n\nconst csvHeader = 'id,mitgliedsnummer,name,vorname,insta,website,flyer\\n';\nconst csvRows = members.map(m => {\n  const yn = v => (v ? 'Ja' : 'Nein');\n  const esc = s => `\"${String(s ?? '').replace(/\"/g, '\"\"')}\"`;\n  return [m.id, esc(m.mitgliedsnummer), esc(m.name), esc(m.vorname), yn(m.insta), yn(m.website), yn(m.flyer)].join(',');\n}).join('\\n');\n\nconst meta = {\n  last_sync_at: exportedAt,\n  source: payload.source,\n  trigger: payload.trigger,\n  member_count: members.length,\n};\n\nreturn [{\n  json: {\n    payload,\n    meta,\n    archiveDay: day,\n    jsonName: 'einwilligungen.json',\n    csvName: 'einwilligungen.csv',\n    metaName: 'last-sync.json',\n    jsonContent: JSON.stringify(payload, null, 2),\n    csvContent: csvHeader + csvRows + (csvRows ? '\\n' : ''),\n    metaContent: JSON.stringify(meta, null, 2),\n  }\n}];"
+      },
+      "id": "code-validate-001",
+      "name": "Validieren + CSV",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 200]
+    },
+    {
+      "parameters": {
+        "name": "={{ $json.jsonName }}",
+        "driveId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "My Drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "DRIVE_FOLDER_ID_AKTUELL_PLACEHOLDER"
+        },
+        "options": {}
+      },
+      "id": "drive-aktuell-json-001",
+      "name": "Drive aktuell JSON",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [920, 80],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "CREDENTIAL_ID_GOOGLE_DRIVE_PLACEHOLDER",
+          "name": "Google Drive (Platzhalter)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "name": "={{ $('Validieren + CSV').item.json.csvName }}",
+        "driveId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "My Drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "DRIVE_FOLDER_ID_AKTUELL_PLACEHOLDER"
+        },
+        "options": {}
+      },
+      "id": "drive-aktuell-csv-001",
+      "name": "Drive aktuell CSV",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [920, 240],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "CREDENTIAL_ID_GOOGLE_DRIVE_PLACEHOLDER",
+          "name": "Google Drive (Platzhalter)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "name": "={{ $('Validieren + CSV').item.json.jsonName }}",
+        "driveId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "My Drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "DRIVE_FOLDER_ID_ARCHIV_PLACEHOLDER"
+        },
+        "options": {}
+      },
+      "id": "drive-archiv-json-001",
+      "name": "Drive Archiv JSON",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [1140, 80],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "CREDENTIAL_ID_GOOGLE_DRIVE_PLACEHOLDER",
+          "name": "Google Drive (Platzhalter)"
+        }
+      },
+      "notes": "Ordnerpfad Platzhalter: …/<DRIVE-ORDNER>/archiv/YYYY-MM-DD/ — in n8n auf datierten Unterordner verdrahten (archiveDay)."
+    },
+    {
+      "parameters": {
+        "name": "={{ $('Validieren + CSV').item.json.metaName }}",
+        "driveId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "My Drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "DRIVE_FOLDER_ID_META_PLACEHOLDER"
+        },
+        "options": {}
+      },
+      "id": "drive-meta-001",
+      "name": "Drive meta last-sync",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [1140, 240],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "CREDENTIAL_ID_GOOGLE_DRIVE_PLACEHOLDER",
+          "name": "Google Drive (Platzhalter)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"ok\": true, \"member_count\": $('Validieren + CSV').item.json.payload.members.length, \"exported_at\": $('Validieren + CSV').item.json.payload.exported_at } }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "resp-200-001",
+      "name": "200 OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1360, 200]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Secret prüfen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Secret prüfen": {
+      "main": [
+        [
+          {
+            "node": "Validieren + CSV",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "401 Unauthorized",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validieren + CSV": {
+      "main": [
+        [
+          {
+            "node": "Drive aktuell JSON",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Drive aktuell CSV",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Drive Archiv JSON",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Drive meta last-sync",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Drive aktuell JSON": {
+      "main": [
+        [
+          {
+            "node": "200 OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Drive aktuell CSV": {
+      "main": [
+        [
+          {
+            "node": "200 OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Drive Archiv JSON": {
+      "main": [
+        [
+          {
+            "node": "200 OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Drive meta last-sync": {
+      "main": [
+        [
+          {
+            "node": "200 OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "openjverein",
+      "id": "tag-ojv-placeholder"
+    }
+  ],
+  "triggerCount": 1,
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "instanceId": "INSTANCE_ID_PLACEHOLDER"
+  }
+}
