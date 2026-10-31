@@ -175,6 +175,15 @@ def write_csv(path: Path, members: list[dict[str, Any]]) -> None:
             w.writerow(row)
 
 
+def http_timeout_seconds() -> float:
+    """Webhook timeout; start/outbox flush should stay short (env override)."""
+    raw = env("N8N_HTTP_TIMEOUT_SECONDS", "60") or "60"
+    try:
+        return max(1.0, float(raw))
+    except ValueError:
+        return 60.0
+
+
 def post_webhook(cfg: dict[str, Any], payload: dict[str, Any]) -> None:
     url = cfg["webhook_url"]
     if not url or "N8N_HOST_PLACEHOLDER" in url:
@@ -188,7 +197,7 @@ def post_webhook(cfg: dict[str, Any], payload: dict[str, Any]) -> None:
         "X-Webhook-Secret": cfg["webhook_secret"] or "",
     }
     req = Request(url, data=body, headers=headers, method="POST")
-    with urlopen(req, timeout=60) as resp:
+    with urlopen(req, timeout=http_timeout_seconds()) as resp:
         code = getattr(resp, "status", None) or resp.getcode()
         if code is None or int(code) >= 400:
             raise RuntimeError(f"Webhook HTTP {code}")

@@ -3,7 +3,8 @@ REM Thin launcher for Jameica Scripting hooks (Windows). Sync nur bei Start/Exit
 REM Usage:
 REM   export-trigger.cmd start
 REM   export-trigger.cmd exit [JAMEICA_PID]
-setlocal EnableExtensions
+REM Must never be waited on by Jameica's scripting thread.
+setlocal EnableExtensions EnableDelayedExpansion
 set "SCRIPT_DIR=%~dp0"
 set "REPO_ROOT=%SCRIPT_DIR%.."
 if not defined ENV_FILE set "ENV_FILE=%REPO_ROOT%\.env"
@@ -28,6 +29,8 @@ if exist "%ENV_FILE%" (
 )
 
 if /I "%MODE%"=="start" (
+  REM Nur Outbox — kurzer HTTP-Timeout; kein H2 beim Start
+  if not defined N8N_HTTP_TIMEOUT_SECONDS set "N8N_HTTP_TIMEOUT_SECONDS=8"
   echo [export-trigger] Exporter ^(outbox_flush^)…
   "%PYTHON%" "%EXPORTER%" --env-file "%ENV_FILE%" --trigger outbox_flush --flush-only
   exit /b 0
@@ -36,12 +39,20 @@ if /I "%MODE%"=="start" (
 if /I "%MODE%"=="exit" (
   if not "%WAIT_PID%"=="" (
     echo [export-trigger] Warte auf Jameica-PID %WAIT_PID%…
+    if not defined EXIT_PID_WAIT_SECONDS set "EXIT_PID_WAIT_SECONDS=600"
+    set /a waited=0
     :wait_loop
     tasklist /FI "PID eq %WAIT_PID%" 2>NUL | find "%WAIT_PID%" >NUL
     if not errorlevel 1 (
       timeout /T 1 /NOBREAK >NUL
+      set /a waited+=1
+      if !waited! GEQ !EXIT_PID_WAIT_SECONDS! (
+        echo [export-trigger] Timeout ^(!EXIT_PID_WAIT_SECONDS!s^) — Export trotzdem versuchen 1>&2
+        goto wait_done
+      )
       goto wait_loop
     )
+    :wait_done
     if not defined EXIT_H2_SETTLE_SECONDS set "EXIT_H2_SETTLE_SECONDS=2"
     timeout /T %EXIT_H2_SETTLE_SECONDS% /NOBREAK >NUL
   )

@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Thin launcher for Jameica Scripting hooks (start/exit). No Cron.
 # Usage:
-#   export-trigger.sh start              # Outbox flush (H2 oft gesperrt)
+#   export-trigger.sh start              # Outbox flush only (async from Jameica)
 #   export-trigger.sh exit [JAMEICA_PID] # wartet auf PID-Ende, dann Full-Export
+# Must never be waited on by Jameica's scripting thread.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -38,23 +39,23 @@ run_exporter() {
 
 case "${MODE}" in
   start)
-    # Beim Start: nur Outbox — H2 ist typischerweise noch gesperrt
+    # Nur Outbox — kurzer HTTP-Timeout; niemals H2/Full-Export beim Start
+    export N8N_HTTP_TIMEOUT_SECONDS="${N8N_HTTP_TIMEOUT_SECONDS:-8}"
     run_exporter outbox_flush --flush-only || true
     ;;
   exit)
     if [[ -n "${WAIT_PID}" ]]; then
       log "Warte auf Jameica-PID ${WAIT_PID}…"
-      # warte bis Prozess weg ist (max. ~10 Min.)
       waited=0
+      max_wait="${EXIT_PID_WAIT_SECONDS:-600}"
       while kill -0 "${WAIT_PID}" 2>/dev/null; do
         sleep 1
         waited=$((waited + 1))
-        if [[ "${waited}" -ge 600 ]]; then
-          log "Timeout beim Warten auf PID ${WAIT_PID} — Export trotzdem versuchen" >&2
+        if [[ "${waited}" -ge "${max_wait}" ]]; then
+          log "Timeout (${max_wait}s) beim Warten auf PID ${WAIT_PID} — Export trotzdem versuchen" >&2
           break
         fi
       done
-      # kurze Pause, damit H2 die Datei freigibt
       sleep "${EXIT_H2_SETTLE_SECONDS:-2}"
     fi
     run_exporter jameica_exit
