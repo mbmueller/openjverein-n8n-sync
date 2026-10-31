@@ -10,10 +10,11 @@
  *   4. Jameica wie gewohnt starten/beenden (kein Wrapper um die Binary nötig).
  *
  * Verhalten:
- *   - Beim Start: optional Outbox flushen — IMMER asynchron (Daemon-Thread +
- *     detached Prozess), nie auf dem Scripting-/UI-Thread warten.
- *   - Full-Export nur bei sauberem Beenden (SYSTEM_SHUTDOWN), detached
- *     (wartet außerhalb von Jameica auf PID-Ende → H2 readonly → n8n).
+ *   - Beim Start / SYSTEM_STARTED / Script-Eval: ABSOLUT NICHTS synchronisieren —
+ *     kein Outbox-Flush, kein Process-Spawn, kein Extra-Thread, kein File-I/O.
+ *     Nur Registrierung eines SYSTEM_SHUTDOWN-Consumers (schnell).
+ *   - Full-Export ausschließlich bei sauberem Beenden (SYSTEM_SHUTDOWN),
+ *     ProcessBuilder ohne waitFor (detached; wartet außerhalb von Jameica).
  *
  * Wenn Jameica beim Start hängt (alte Version dieses Scripts):
  *   Jameica beenden/killen, dann Dateisystem-Recovery laut README
@@ -26,15 +27,6 @@
 /* global Java, Packages, events, JavaAdapter */
 
 var SYNC_ROOT = ""; // z. B. "C:\\Users\\<username>\\openjverein-n8n-sync" oder "/home/verein/…"
-
-/**
- * Start-Outbox: true = detached Retry nach Boot-Verzögerung; false = nur Exit-Export.
- * Full-Export läuft ohnehin nur beim Beenden — Start darf Jameica nie blockieren.
- */
-var ENABLE_START_OUTBOX_FLUSH = true;
-
-/** Millisekunden warten, bevor der Start-Outbox-Prozess gestartet wird (UI erst fertig booten). */
-var START_OUTBOX_DELAY_MS = 5000;
 
 function _javaType(name) {
   try {
@@ -105,9 +97,10 @@ function _newStringList() {
 
 /**
  * Startet export-trigger vollständig detached (kein waitFor, überlebt Jameica-Exit).
- * @param {string} mode "start" | "exit"
+ * Nur für Exit gedacht. Kein Runtime.exec mit Warte-Schleife, kein sync HTTP.
+ * @param {string} mode derzeit nur "exit"
  */
-function spawnExport(mode) {
+function spawnExportDetached(mode) {
   var File = _javaType("java.io.File");
   var ProcessBuilder = _javaType("java.lang.ProcessBuilder");
   var root = _resolveRoot();
@@ -128,7 +121,6 @@ function spawnExport(mode) {
   var cmd = _newStringList();
   if (win) {
     // start "" /B: Fenster-Titel leer, sofort zurück — Kind überlebt Jameica-Ende.
-    // Zweiter cmd /c: Argumente zuverlässig an die .cmd durchreichen.
     var inner = "\"" + trigger.getAbsolutePath() + "\" " + mode;
     if (pidArg) {
       inner += " " + pidArg;
@@ -157,7 +149,7 @@ function spawnExport(mode) {
   } catch (e) {
     // ältere Java: Output nicht umleiten
   }
-  // Nur starten — niemals waitFor / inheritIO-Blockade
+  // Nur starten — niemals waitFor / inheritIO / busy-loop / Runtime.exec+wait
   var proc = pb.start();
   try {
     proc.getInputStream().close();
@@ -168,50 +160,16 @@ function spawnExport(mode) {
 }
 
 /**
- * Plant Start-Outbox auf Daemon-Thread (ScriptingService.eval kehrt sofort zurück).
+ * SYSTEM_SHUTDOWN: Export detached anstoßen und sofort zurückkehren
+ * (Jameica-Shutdown-Pfad nicht blockieren).
  */
-function scheduleStartOutboxFlush() {
-  if (!ENABLE_START_OUTBOX_FLUSH) {
-    _log("Start-Outbox deaktiviert (ENABLE_START_OUTBOX_FLUSH=false) — Export nur bei Exit");
-    return;
-  }
-  var Thread = _javaType("java.lang.Thread");
-  var delay = START_OUTBOX_DELAY_MS;
-  if (!(delay >= 0)) {
-    delay = 5000;
-  }
-  var runner = new Thread(function () {
-    try {
-      if (delay > 0) {
-        Thread.sleep(delay);
-      }
-      spawnExport("start");
-    } catch (e) {
-      _log("Start-Outbox fehlgeschlagen: " + e);
-    }
-  });
-  runner.setName("ojv-n8n-sync-start");
-  runner.setDaemon(true);
-  runner.start();
-  _log("Start-Outbox geplant in " + delay + "ms (non-blocking)");
-}
-
-function onJameicaStart() {
-  try {
-    scheduleStartOutboxFlush();
-  } catch (e) {
-    _log("Start-Sync fehlgeschlagen: " + e);
-  }
-}
-
 function onJameicaShutdown(message) {
   try {
     var SystemMessage = _javaType("de.willuhn.jameica.messaging.SystemMessage");
     if (message && message.getStatusCode && message.getStatusCode() !== SystemMessage.SYSTEM_SHUTDOWN) {
       return;
     }
-    // Detached ProcessBuilder — kein waitFor auf dem Shutdown-Thread
-    spawnExport("exit");
+    spawnExportDetached("exit");
   } catch (e) {
     _log("Exit-Sync fehlgeschlagen: " + e);
   }
@@ -256,20 +214,18 @@ function registerShutdownConsumer() {
   }
 
   Application.getMessagingFactory().registerMessageConsumer(consumer);
-  _log("SYSTEM_SHUTDOWN-Consumer registriert");
+  _log("SYSTEM_SHUTDOWN-Consumer registriert (kein Start-Sync)");
 }
 
 // --- Bootstrap (ScriptingService.eval läuft synchron nach SYSTEM_STARTED) ---
-// Wichtig: hier nichts blockieren — sonst hängt Jameica vor der UI.
+// Kritisch: hier KEIN Sync, KEIN Spawn, KEIN Thread, KEIN File-I/O.
+// Nur MessageConsumer-Registrierung — sonst hängt Jameica vor der UI.
 try {
-  _resolveRoot(); // früh failen mit klarer Meldung (schnell, kein I/O-Wait)
-  registerShutdownConsumer(); // nur Registrierung, kein Export
-  onJameicaStart();           // plant Daemon-Thread; kehrt sofort zurück
+  registerShutdownConsumer();
   if (typeof events !== "undefined" && events && events.add) {
-    events.add("openjverein.n8n.sync.start", "onJameicaStart");
     events.add("openjverein.n8n.sync.exit", "onJameicaShutdown");
   }
-  _log("Hook aktiv (non-blocking Start; Full-Export nur bei Exit)");
+  _log("Hook aktiv — Sync nur bei Exit; Start = no-op");
 } catch (bootErr) {
   _log("Bootstrap fehlgeschlagen: " + bootErr);
 }

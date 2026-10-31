@@ -6,15 +6,15 @@ Synchronisiert die Zusatzfelder **`insta`**, **`website`**, **`flyer`** (Ja/Nein
 
 **Lizenz:** [PolyForm Noncommercial 1.0.0](LICENSE) — frei nutzbar, änderbar und weitergebbar **nichtkommerziell**; **kein Verkauf** der Software. Details und Mitwirken: [CONTRIBUTING.md](CONTRIBUTING.md).
 
-**Trigger:** Jameicas eingebautes **Scripting** (Start- und Shutdown-Hook). Jameica wird **normal** gestartet — **kein** Wrapper um die Binary nötig. Kein Cron, kein Task Scheduler. Fehlgeschlagene Uploads landen in `outbox/` und werden beim **nächsten** Start/Exit erneut versucht.
+**Trigger:** Jameicas eingebautes **Scripting** — Sync **nur beim Beenden** (`SYSTEM_SHUTDOWN`). Jameica wird **normal** gestartet — **kein** Wrapper um die Binary nötig. Kein Cron, kein Task Scheduler. Fehlgeschlagene Uploads landen in `outbox/` und werden beim **nächsten Exit** (oder manuell) erneut versucht.
 
-**Start hängt nicht:** Der Start-Hook plant höchstens einen **detachten** Outbox-Retry auf einem Daemon-Thread (kein `waitFor`, kein Full-Export, kein H2 beim Start). Full-Export nur beim **Beenden**.
+**Start = kein Sync:** Nach `SYSTEM_STARTED` macht das Script **nichts** außer den Shutdown-Consumer zu registrieren (kein Outbox-Flush, kein Prozess, kein Extra-Thread, kein File-I/O). Full-Export nur beim **Beenden**, detached ohne `waitFor` auf Jameicas Shutdown-Pfad.
 
 ## Architektur (kurz)
 
-1. In Jameica registriertes Script (`scripts/jameica-openjverein-sync.js`) läuft nach dem Start und lauscht auf Beenden.
-2. **Start:** optional Outbox → n8n, **asynchron** (H2 bleibt unberührt). Abschaltbar: `ENABLE_START_OUTBOX_FLUSH = false` in der `.js`.
-3. **Sauberes Beenden:** detachter Exit-Export wartet **außerhalb** von Jameica auf Prozessende, liest H2 **readonly** (kein `AUTO_SERVER`).
+1. In Jameica registriertes Script (`scripts/jameica-openjverein-sync.js`) wird nach dem Start evaluiert und registriert nur den Beenden-Hook.
+2. **Start / Script-Load:** absichtlich **no-op** für Sync (vermeidet Hang vor der UI).
+3. **Sauberes Beenden:** detachter Exit-Export wartet **außerhalb** von Jameica auf Prozessende, liest H2 **readonly** (kein `AUTO_SERVER`), flushed Outbox mit.
 4. Filter: nur **aktive** Mitglieder (`austritt` leer) mit **mindestens einer** Einwilligung.
 5. Schreibt `einwilligungen.json` + `.csv`, POSTet an n8n (`X-Webhook-Secret`).
 6. n8n legt Dateien unter Drive `aktuell/` und datiertem `archiv/` ab (optional `meta/last-sync.json`).
@@ -65,7 +65,7 @@ Die registrierte Datei umbenennen, z. B. `jameica-openjverein-sync.js` → `ja
 
 ### 5. Danach
 
-Aktuelles Repo/PR ziehen, erneut registrieren. Bei Bedarf in der `.js` `ENABLE_START_OUTBOX_FLUSH = false` setzen (nur Exit-Export).
+Aktuelles Repo/PR ziehen, erneut registrieren. Die aktuelle Hook-Version synct beim Start **nicht** mehr.
 
 ## Voraussetzungen
 
@@ -119,17 +119,15 @@ Jameica bringt unter **Datei → Einstellungen → Scripting** eine Liste regist
 
 | Zeitpunkt | Aktion |
 |-----------|--------|
-| Nach Jameica-Start (Script-Load) | Nur Registrierung + **geplanter** detached Outbox-Flush (Daemon-Thread, Default ~5 s Verzögerung). Kein Warten, kein H2. |
-| Bei `SYSTEM_SHUTDOWN` (sauberes Beenden) | Detachter Exit-Export: wartet **außerhalb** von Jameica auf PID-Ende, dann Full-Export |
-
-In `scripts/jameica-openjverein-sync.js`: `ENABLE_START_OUTBOX_FLUSH = false` schaltet den Start-Retry ab (Export nur noch beim Beenden).
+| Nach Jameica-Start (Script-Load / `SYSTEM_STARTED`) | **Kein Sync** — nur `SYSTEM_SHUTDOWN`-Consumer registrieren |
+| Bei `SYSTEM_SHUTDOWN` (sauberes Beenden) | Detachter Exit-Export: wartet **außerhalb** von Jameica auf PID-Ende, dann Full-Export + Outbox |
 
 **Hinweis macOS:** Beenden über den roten Fensterknopf oder **Datei → Beenden**, damit Shutdown-Hooks laufen (nicht Cmd+Q).
 
 ### Manueller Test ohne Jameica
 
 ```bash
-./scripts/export-trigger.sh start          # nur Outbox
+./scripts/export-trigger.sh start          # nur Outbox (manuell; Jameica startet das nicht)
 ./scripts/export-trigger.sh exit           # Full-Export (Jameica sollte zu sein)
 python exporter/export.py --trigger jameica_exit
 ```
@@ -186,7 +184,7 @@ Dieses Repo ist **publishbar**: keine echten Hosts, Tokens oder DB-Pfade.
 ## Hinweise
 
 - Primärpfad ist **nach Exit** (H2 freigegeben). Parallel-JDBC bei laufendem Jameica wird vermieden.
-- Start-Hook ist **non-blocking** (Hang-Fix): kein synchrones Warten auf Shell, PID, H2 oder n8n im Scripting-Thread.
+- Start-/Eval-Pfad ist **Sync-no-op** (Hang-Fix): kein Process-Spawn, kein Thread, kein File-I/O, kein HTTP beim Laden.
 - Filter „≥1 Einwilligung“ sitzt im Exporter; n8n wiederholt ihn als Sicherheitsnetz.
-- Kein täglicher Zeitplan: Sync und Outbox-Retry nur über Jameica-Scripts bei Start/Exit.
-- Hintergrund: Jameica `ScriptingService` — Scripts unter Einstellungen → Scripting; Auswertung nach `SYSTEM_STARTED` (**synchrones** `eval` — deshalb darf unser Hook dort nicht blockieren); Shutdown über Message `SYSTEM_SHUTDOWN`.
+- Kein täglicher Zeitplan: Sync nur über Jameica-Script bei **Exit** (Outbox-Retry manuell oder beim nächsten Exit).
+- Hintergrund: Jameica `ScriptingService` — Scripts unter Einstellungen → Scripting; Auswertung nach `SYSTEM_STARTED` (**synchrones** `eval` — dort nichts Blockierendes); Shutdown über Message `SYSTEM_SHUTDOWN`.

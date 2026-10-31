@@ -4,7 +4,7 @@ OpenJVerein Bildnutzungs-Einwilligungen → JSON/CSV → n8n Webhook.
 
 Primärpfad: Jameica Scripting (scripts/) ruft nach Exit diesen Exporter auf;
 H2 readonly lesen (kein AUTO_SERVER). Bei POST-Fehler: Outbox;
-Retry beim nächsten Start/Exit-Lauf.
+Retry beim nächsten Exit oder manuell (export-trigger start).
 """
 
 from __future__ import annotations
@@ -265,7 +265,7 @@ def run(
     if not skip_flush:
         left = flush_outbox(cfg)
         if left:
-            print(f"Outbox: {left} Datei(en) warten auf nächsten Start/Exit.")
+            print(f"Outbox: {left} Datei(en) warten auf nächsten Exit oder manuellen Flush.")
 
     if flush_only:
         return 0

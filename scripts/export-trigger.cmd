@@ -1,9 +1,9 @@
 @echo off
-REM Thin launcher for Jameica Scripting hooks (Windows). Sync nur bei Start/Exit — kein Task Scheduler.
+REM Thin launcher for Jameica Scripting hooks (Windows). Sync nur bei Exit — kein Task Scheduler.
 REM Usage:
-REM   export-trigger.cmd start
+REM   export-trigger.cmd start              REM Outbox manuell (Jameica startet das nicht)
 REM   export-trigger.cmd exit [JAMEICA_PID]
-REM Must never be waited on by Jameica's scripting thread.
+REM Jameica ruft nur exit detached auf — niemals waitFor auf dem Scripting-/Shutdown-Thread.
 setlocal EnableExtensions EnableDelayedExpansion
 set "SCRIPT_DIR=%~dp0"
 set "REPO_ROOT=%SCRIPT_DIR%.."
