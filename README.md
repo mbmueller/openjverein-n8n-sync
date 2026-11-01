@@ -106,6 +106,7 @@ Typische Ursachen (oft kombiniert):
 | Nur Fenster schließen / Kill statt **Datei → Beenden** | JVM-Hook kann ausbleiben |
 | `.env` Platzhalter / H2-Pfad falsch | Trigger läuft, Webhook/H2 scheitert → Marker `…-exporter-http.txt` / `…-exporter-fail.txt`, ggf. Outbox |
 | Alter Hang-Hook noch registriert | Start freeze — Recovery unten |
+| Truthiness/`var e = events` auf globalem `events` | `eval-fail.txt`: `Invalid JavaScript value of type …ScriptingService$Events` — Sync-Script nutzt `events` **nicht** |
 
 `SYSTEM_SHUTDOWN` geht **nicht** an `events.*`. MessageConsumer/`Java.extend` hängt beim Eval — deshalb **Runtime-Shutdown-Hook**. Bei **Datei → Beenden** ruft Jameica `System.exit` auf → Hooks laufen. Der Jameica-Logger ist zu dem Zeitpunkt oft schon geschlossen; deshalb zählen die **Marker-Dateien**.
 
@@ -118,6 +119,7 @@ Zusätzlich, wenn `SYNC_ROOT` ok: `<Repo>/logs/ojv-n8n-sync-*.txt` und `logs/exp
 | Datei | Bedeutung |
 |-------|-----------|
 | `ojv-n8n-sync-eval.txt` | Script wurde evaluiert (Load ok) |
+| `ojv-n8n-sync-eval-fail.txt` | Bootstrap abgebrochen (früher: Events-Truthiness) |
 | `ojv-n8n-sync-root-ok.txt` / `root-fail.txt` | Repo-Pfad gesetzt bzw. fehlt |
 | `ojv-n8n-sync-hook-registered.txt` | Shutdown-Hook hängt an der JVM |
 | `ojv-n8n-sync-start-skipped.txt` | Start-Outbox absichtlich aus |
@@ -137,10 +139,11 @@ Optional in Jameica-Log (solange Logger noch offen): Zeilen mit `[openjverein-n8
 ## Hang-Ursache (kurz)
 
 `ScriptingService` evaluiert registrierte `.js` **synchron** nach `SYSTEM_STARTED`.  
-Community-Scripts (Hibiscus) nutzen `Packages` + `events.add` ohne Problem.  
 Unser früherer Hook registrierte einen **`MessageConsumer` via `Java.extend` / `JavaAdapter`** im Eval-Pfad → Start freeze. Leere `.js` startete; Hook-Code nicht.
 
-**Arbeitendes Muster:** Eval nur leicht (`events.add` + deferred Daemon-Thread); Shutdown über **`Runtime.addShutdownHook`**; Export nur **`ProcessBuilder.start()` ohne waitFor**.  
+Zusätzlich: globales `events` (`ScriptingService$Events`) darf in Rhino **nicht** als JS-Wert behandelt werden (`if (events)`, `var e = events`, Wrap/Return) — das wirft `InternalError: Invalid JavaScript value of type …Events`. Hibiscus ruft nur `events.add(…)` direkt auf; der Sync-Pfad verzichtet ganz auf `events` und nutzt nur den JVM-Hook.
+
+**Arbeitendes Muster:** Eval nur Marker + deferred Daemon-Thread; Shutdown über **`Runtime.addShutdownHook`**; Export nur **`ProcessBuilder.start()` ohne waitFor**.  
 `SYSTEM_SHUTDOWN` wird von Jameica **nicht** auf `events.*` gemappt — deshalb Hook statt Event-API.
 
 Optional später: winziges Java-Plugin, das bei `SYSTEM_SHUTDOWN` `QueryMessage("function.…")` an Queue `jameica.scripting` schickt (InvokeScriptMessageConsumer) — JS bleibt ohne Consumer.

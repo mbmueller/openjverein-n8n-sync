@@ -2,9 +2,13 @@
  * OpenJVerein → n8n Sync — Jameica Scripting-Hook (ohne Launcher).
  *
  * Wichtig (Hang-Ursache): MessageConsumer via Java.extend / JavaAdapter beim
- * ScriptingService.eval blockiert den Start. Community-Scripts nutzen
- * Packages + events.add — das ist ok. Shutdown hier über
+ * ScriptingService.eval blockiert den Start. Shutdown hier über
  * Runtime.addShutdownHook (deferred), Export nur detached (kein waitFor).
+ *
+ * Rhino/Nashorn: globales `events` (ScriptingService$Events) NICHT als JS-Wert
+ * behandeln — kein `var e = events`, kein `if (events)`, kein Wrap/Return.
+ * Wahrheitstest wirft: InternalError: Invalid JavaScript value of type
+ * …ScriptingService$Events. Dieser Sync-Pfad braucht events nicht.
  *
  * Datei→Beenden: Application.shutDown() sendet SYSTEM_SHUTDOWN, schließt den
  * Logger und ruft System.exit(0) → JVM-Shutdown-Hooks laufen. events.* bekommt
@@ -24,9 +28,12 @@
  * Kein Cron. Keine personenbezogenen Pfade im Repo.
  */
 
-/* global Java, Packages, events */
+/* global Java, Packages */
 
-/** Absoluter Pfad zum Repo — oder Umgebungsvariable OPENJVEREIN_N8N_SYNC_ROOT. */
+/**
+ * Absoluter Pfad zum Repo — oder Umgebungsvariable OPENJVEREIN_N8N_SYNC_ROOT.
+ * Leer lassen = ENV nutzen; beides leer → root-fail.txt, Hook trotzdem registriert.
+ */
 var SYNC_ROOT = "";
 
 /**
@@ -345,13 +352,11 @@ function _deferredBoot() {
   runner.start();
 }
 
-// --- Bootstrap: nur events + deferred Thread (Eval kehrt sofort zurück) ---
+// --- Bootstrap: nur deferred Thread → Runtime.addShutdownHook (kein events) ---
 try {
   _diag(DIAG_PREFIX + "eval.txt", "script eval ok (bootstrap)");
-  if (typeof events !== "undefined" && events && events.add) {
-    events.add("openjverein.n8n.sync.start", "onJameicaStartOutbox");
-    events.add("openjverein.n8n.sync.exit", "onJameicaShutdownExport");
-  }
+  // Absichtlich kein events.* — Rhino wirft bei Truthiness/Assign auf
+  // ScriptingService$Events (eval-fail: Invalid JavaScript value …Events).
   _log("script loaded — registering hook deferred (" + BOOT_DEFER_MS + "ms)");
   _deferredBoot();
 } catch (bootErr) {

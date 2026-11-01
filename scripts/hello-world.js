@@ -29,8 +29,12 @@
 
 /* global Java, Packages, events */
 
-/** Community-Pattern: events.add — Hibiscus-Scripts machen das seit Jahren. */
-var STAGE_EVENTS = true;
+/**
+ * Optional: nur events.add(…) direkt aufrufen (Hibiscus).
+ * Default false — Truthiness/Assign auf ScriptingService$Events wirft in Rhino
+ * InternalError: Invalid JavaScript value of type …Events.
+ */
+var STAGE_EVENTS = false;
 
 /** Logger via Packages — ebenfalls Community-Standard. */
 var STAGE_LOGGER = true;
@@ -163,8 +167,13 @@ function _scheduleShutdownHook() {
 
 // --- Bootstrap: bewusst leicht; kein ProcessBuilder, kein MessageConsumer ---
 try {
-  if (STAGE_EVENTS && typeof events !== "undefined" && events && events.add) {
-    events.add("openjverein.n8n.sync.hello", "ojvHelloWorld");
+  if (STAGE_EVENTS) {
+    try {
+      // Nur Methodenaufruf — kein if (events) / var e = events (Rhino InternalError).
+      events.add("openjverein.n8n.sync.hello", "ojvHelloWorld");
+    } catch (evErr) {
+      _log("events.add skipped: " + evErr);
+    }
   }
   _log("loaded (hello-world proof)");
   _writeMarker(
