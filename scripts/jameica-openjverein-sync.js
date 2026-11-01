@@ -19,7 +19,7 @@
  * (siehe README). Alte Hook-Versionen aus Scripting entfernen (Recovery).
  *
  * Installation:
- *   1. Repo klonen, .env füllen, SYNC_ROOT unten oder ENV setzen.
+ *   1. Repo klonen, .env füllen, SYNC_ROOT unten setzen (Jameica hat oft keine ENV).
  *   2. Jameica normal starten (kein Launcher/Wrapper).
  *   3. Datei → Einstellungen → Scripting → diese Datei hinzufügen → Speichern.
  *   4. Neu starten; sauber beenden (Datei → Beenden) → Exit-Export.
@@ -28,13 +28,21 @@
  * Kein Cron. Keine personenbezogenen Pfade im Repo.
  */
 
-/* global Java, Packages */
+/* global Java, Packages, __FILE__, __DIR__ */
 
+// =============================================================================
+// CONFIG — Marlon: SYNC_ROOT hier setzen (Jameica bekommt meist keine ENV)
+// =============================================================================
 /**
- * Absoluter Pfad zum Repo — oder Umgebungsvariable OPENJVEREIN_N8N_SYNC_ROOT.
- * Leer lassen = ENV nutzen; beides leer → root-fail.txt, Hook trotzdem registriert.
+ * Absoluter Pfad zum geklonten Repo. Platzhalter ersetzen.
+ * Windows: Backslashes verdoppeln, z. B. "C:\\Users\\…\\openjverein-n8n-sync"
+ * Linux/macOS: "/home/…/openjverein-n8n-sync"
+ *
+ * Fallback-Reihenfolge: ENV OPENJVEREIN_N8N_SYNC_ROOT → dieser Wert →
+ * Parent von scripts/, falls Scripting den registrierten .js-Pfad liefert.
+ * Platzhalter/leer → root-fail.txt (Hook registriert sich trotzdem).
  */
-var SYNC_ROOT = "";
+var SYNC_ROOT = "C:\\path\\to\\openjverein-n8n-sync";
 
 /**
  * true = nach Boot Outbox flushen (detached + Delay).
@@ -120,14 +128,165 @@ function _diag(basename, text) {
   }
 }
 
+/** Platzhalter oder leer — gilt als „nicht gesetzt“. */
+function _isUnsetRoot(value) {
+  var s = String(value || "").replace(/^\s+|\s+$/g, "");
+  if (!s) {
+    return true;
+  }
+  var lower = s.toLowerCase();
+  return (
+    lower.indexOf("\\path\\to\\openjverein") >= 0 ||
+    lower.indexOf("/path/to/openjverein") >= 0 ||
+    lower === "c:\\path\\to\\openjverein-n8n-sync"
+  );
+}
+
+/**
+ * Repo-Root aus registriertem Script-Pfad ableiten (…/scripts/jameica-openjverein-sync.js → …/).
+ * Nutzt __FILE__/__DIR__ wenn die Engine sie setzt, sonst ScriptingService.getScripts()
+ * bzw. Settings scripts.N (falls Scripting den Pfad exponiert).
+ */
+function _guessRootFromScript() {
+  var File = _javaType("java.io.File");
+  var scriptCandidates = [];
+
+  try {
+    if (typeof __DIR__ !== "undefined" && __DIR__) {
+      scriptCandidates.push(new File(String(__DIR__), "jameica-openjverein-sync.js"));
+    }
+  } catch (eDir) { /* optional */ }
+
+  try {
+    if (typeof __FILE__ !== "undefined" && __FILE__) {
+      scriptCandidates.push(new File(String(__FILE__)));
+    }
+  } catch (eFile) { /* optional */ }
+
+  try {
+    var Application = _javaType("de.willuhn.jameica.system.Application");
+    var ScriptingService = _javaType("de.willuhn.jameica.services.ScriptingService");
+    var svc = Application.getBootLoader().getBootable(ScriptingService);
+    if (svc) {
+      var files = svc.getScripts();
+      if (files) {
+        var it = files.iterator();
+        while (it.hasNext()) {
+          scriptCandidates.push(it.next());
+        }
+      }
+    }
+  } catch (eSvc) { /* Scripting API nicht erreichbar */ }
+
+  try {
+    var Settings = _javaType("de.willuhn.jameica.system.Settings");
+    var settings = new Settings(_javaType("de.willuhn.jameica.services.ScriptingService"));
+    // getList ohne Default-Array: manche Settings-Impls liefern null/leer
+    var list = null;
+    try {
+      list = settings.getList("scripts", null);
+    } catch (eNull) {
+      try {
+        var ArrayCls = _javaType("java.lang.reflect.Array");
+        var StringCls = _javaType("java.lang.String");
+        list = settings.getList("scripts", ArrayCls.newInstance(StringCls, 0));
+      } catch (eArr) { /* skip */ }
+    }
+    if (list) {
+      var platform = null;
+      try {
+        platform = _javaType("de.willuhn.jameica.system.Application").getPlatform();
+      } catch (ePlat) { /* ignore */ }
+      for (var i = 0; i < list.length; i++) {
+        var raw = list[i];
+        if (!raw) {
+          continue;
+        }
+        var abs = String(raw);
+        try {
+          if (platform) {
+            abs = String(platform.toAbsolute(abs));
+          }
+        } catch (eAbs) { /* keep raw */ }
+        scriptCandidates.push(new File(abs));
+      }
+    }
+  } catch (eSet) { /* Settings optional */ }
+
+  for (var c = 0; c < scriptCandidates.length; c++) {
+    try {
+      var sf = scriptCandidates[c];
+      if (!sf) {
+        continue;
+      }
+      var name = String(sf.getName() || "").toLowerCase();
+      if (name.indexOf("jameica-openjverein-sync") < 0) {
+        continue;
+      }
+      if (!sf.isFile()) {
+        continue;
+      }
+      var scriptsDir = sf.getParentFile();
+      if (!scriptsDir) {
+        continue;
+      }
+      var root = scriptsDir.getParentFile();
+      if (root && root.isDirectory() && _rootLooksValid(root)) {
+        return root.getAbsolutePath();
+      }
+    } catch (eOne) { /* next candidate */ }
+  }
+  return "";
+}
+
+/** Plausibel: scripts/export-trigger.(cmd|sh) liegt unter dem Root. */
+function _rootLooksValid(rootFile) {
+  try {
+    var File = _javaType("java.io.File");
+    var scripts = new File(rootFile, "scripts");
+    if (!scripts.isDirectory()) {
+      return false;
+    }
+    var cmd = new File(scripts, "export-trigger.cmd");
+    var sh = new File(scripts, "export-trigger.sh");
+    return cmd.isFile() || sh.isFile();
+  } catch (e) {
+    return false;
+  }
+}
+
+/** Konfigurierten/geratenen Root-String (noch ohne Directory-Check). */
+function _configuredRootString() {
+  var System = _javaType("java.lang.System");
+  try {
+    var env = System.getenv("OPENJVEREIN_N8N_SYNC_ROOT");
+    if (env && !_isUnsetRoot(env)) {
+      return String(env).replace(/^\s+|\s+$/g, "");
+    }
+  } catch (eEnv) { /* ignore */ }
+
+  var cfg = String(SYNC_ROOT || "");
+  if (!_isUnsetRoot(cfg)) {
+    return cfg.replace(/^\s+|\s+$/g, "");
+  }
+
+  return _guessRootFromScript();
+}
+
+function _rootHint() {
+  return (
+    "SYNC_ROOT in scripts/jameica-openjverein-sync.js oben setzen " +
+    '(z. B. SYNC_ROOT = "C:\\\\Pfad\\\\zu\\\\openjverein-n8n-sync") — ' +
+    "Jameica hat oft keine ENV; ohne Root kein export-trigger / kein Webhook."
+  );
+}
+
 /** Root ohne Throw — für Marker; leer wenn unset/ungültig. */
 function _peekRoot() {
   try {
-    var System = _javaType("java.lang.System");
     var File = _javaType("java.io.File");
-    var env = System.getenv("OPENJVEREIN_N8N_SYNC_ROOT");
-    var root = (env && String(env).length > 0) ? String(env) : String(SYNC_ROOT || "");
-    if (!root || root.length === 0) {
+    var root = _configuredRootString();
+    if (!root) {
       return "";
     }
     var f = new File(root);
@@ -141,21 +300,37 @@ function _peekRoot() {
 }
 
 function _resolveRoot() {
-  var System = _javaType("java.lang.System");
   var File = _javaType("java.io.File");
-  var env = System.getenv("OPENJVEREIN_N8N_SYNC_ROOT");
-  var root = (env && String(env).length > 0) ? String(env) : String(SYNC_ROOT || "");
-  if (!root || root.length === 0) {
+  var root = _configuredRootString();
+  if (!root) {
     throw new Error(
-      "SYNC_ROOT / OPENJVEREIN_N8N_SYNC_ROOT nicht gesetzt. " +
-      "Bitte in jameica-openjverein-sync.js oder als Umgebungsvariable den Repo-Pfad eintragen."
+      "SYNC_ROOT / OPENJVEREIN_N8N_SYNC_ROOT fehlt oder ist noch der Platzhalter. " +
+      _rootHint()
     );
   }
   var f = new File(root);
   if (!f.isDirectory()) {
-    throw new Error("SYNC_ROOT ist kein Verzeichnis: " + root);
+    throw new Error(
+      "SYNC_ROOT ist kein Verzeichnis: " + root + " — " + _rootHint()
+    );
   }
   return f.getAbsolutePath();
+}
+
+/** Windows: scripts/export-trigger.cmd; sonst .sh — via File-Segmente (kein Separator-Rätsel). */
+function _resolveTrigger(root) {
+  var File = _javaType("java.io.File");
+  var win = _isWindows();
+  var scripts = new File(root, "scripts");
+  var primary = new File(scripts, win ? "export-trigger.cmd" : "export-trigger.sh");
+  if (primary.isFile()) {
+    return primary;
+  }
+  var fallback = new File(scripts, win ? "export-trigger.sh" : "export-trigger.cmd");
+  if (fallback.isFile()) {
+    return fallback;
+  }
+  return primary;
 }
 
 function _isWindows() {
@@ -205,14 +380,23 @@ function spawnExport(mode) {
   try {
     root = _resolveRoot();
   } catch (rootErr) {
-    _diag(DIAG_PREFIX + "spawn-fail.txt", "spawn skip: " + rootErr);
+    _diag(
+      DIAG_PREFIX + "spawn-fail.txt",
+      "spawn-fail mode=" + mode + " reason=no-sync-root detail=" + rootErr +
+        " fix=" + _rootHint()
+    );
     throw rootErr;
   }
 
   var win = _isWindows();
-  var trigger = new File(root, win ? "scripts\\export-trigger.cmd" : "scripts/export-trigger.sh");
+  var trigger = _resolveTrigger(root);
   if (!trigger.isFile()) {
-    var miss = "export-trigger nicht gefunden: " + trigger.getAbsolutePath();
+    var miss =
+      "spawn-fail mode=" + mode +
+      " reason=export-trigger-missing path=" + trigger.getAbsolutePath() +
+      " expected=" + (win ? "scripts\\\\export-trigger.cmd" : "scripts/export-trigger.sh") +
+      " under SYNC_ROOT=" + root +
+      " — Repo-Pfad prüfen; " + _rootHint();
     _diag(DIAG_PREFIX + "spawn-fail.txt", miss);
     throw new Error(miss);
   }
@@ -227,17 +411,18 @@ function spawnExport(mode) {
 
   var logFile = _diagLogPath(root);
   var cmd = _newStringList();
+  var triggerPath = trigger.getAbsolutePath();
   if (win) {
-    var inner = "\"" + trigger.getAbsolutePath() + "\" " + mode;
+    var inner = "\"" + triggerPath + "\" " + mode;
     if (pidArg) {
       inner += " " + pidArg;
     }
-    // start /B detached; Ausgabe anhängen
+    // start /B detached; Ausgabe anhängen — .cmd via cmd.exe
     cmd.add("cmd.exe");
     cmd.add("/c");
     cmd.add("start \"\" /B cmd.exe /c " + inner + " >> \"" + logFile + "\" 2>&1");
   } else {
-    var shellCmd = "nohup \"" + trigger.getAbsolutePath() + "\" " + mode;
+    var shellCmd = "nohup \"" + triggerPath + "\" " + mode;
     if (pidArg) {
       shellCmd += " " + pidArg;
     }
@@ -249,7 +434,8 @@ function spawnExport(mode) {
 
   _diag(
     DIAG_PREFIX + "spawn-" + mode + ".txt",
-    "spawn mode=" + mode + " root=" + root + " waitPid=" + (pidArg || "-") + " log=" + logFile
+    "spawn mode=" + mode + " root=" + root + " trigger=" + triggerPath +
+      " waitPid=" + (pidArg || "-") + " log=" + logFile
   );
 
   var pb = new ProcessBuilder(cmd);
@@ -260,12 +446,21 @@ function spawnExport(mode) {
     pb.redirectOutput(Redirect.DISCARD);
     pb.redirectInput(Redirect.DISCARD);
   } catch (e) { /* ältere Java */ }
-  var proc = pb.start();
   try {
-    proc.getInputStream().close();
-    proc.getErrorStream().close();
-    proc.getOutputStream().close();
-  } catch (closeErr) { /* ignore */ }
+    var proc = pb.start();
+    try {
+      proc.getInputStream().close();
+      proc.getErrorStream().close();
+      proc.getOutputStream().close();
+    } catch (closeErr) { /* ignore */ }
+  } catch (startErr) {
+    _diag(
+      DIAG_PREFIX + "spawn-fail.txt",
+      "spawn-fail mode=" + mode + " reason=process-start path=" + triggerPath +
+        " detail=" + startErr
+    );
+    throw startErr;
+  }
   _log("detached: mode=" + mode + (pidArg ? (" waitPid=" + pidArg) : "") + " log=" + logFile);
 }
 
@@ -280,7 +475,7 @@ function onJameicaStartOutbox() {
   try {
     spawnExport("start");
   } catch (e) {
-    _diag(DIAG_PREFIX + "spawn-fail.txt", "start spawn: " + e);
+    // spawnExport schreibt bereits spawn-fail; hier nur Log
     _log("Start-Outbox fehlgeschlagen: " + e);
   }
 }
@@ -290,7 +485,7 @@ function onJameicaShutdownExport() {
   try {
     spawnExport("exit");
   } catch (e) {
-    _diag(DIAG_PREFIX + "spawn-fail.txt", "exit spawn: " + e);
+    // spawnExport schreibt bereits spawn-fail mit Fix-Hinweis
     _log("Exit-Sync fehlgeschlagen: " + e);
   }
 }
@@ -337,7 +532,10 @@ function _deferredBoot() {
         var root = _resolveRoot();
         _diag(DIAG_PREFIX + "root-ok.txt", "SYNC_ROOT ok: " + root);
       } catch (rootErr) {
-        _diag(DIAG_PREFIX + "root-fail.txt", String(rootErr));
+        _diag(
+          DIAG_PREFIX + "root-fail.txt",
+          String(rootErr) + "\nfix=" + _rootHint()
+        );
         _log("SYNC_ROOT fehlt/ungültig — Hook trotzdem registrieren: " + rootErr);
       }
       _registerShutdownHookNow();

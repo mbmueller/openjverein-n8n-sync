@@ -8,6 +8,8 @@ Synchronisiert die Zusatzfelder **`insta`**, **`website`**, **`flyer`** (Ja/Nein
 
 **Trigger:** Jameica **normal starten** (kein Launcher/Wrapper). Automation über **Jameica Scripting**. Kein Cron.
 
+**Pflicht:** In `scripts/jameica-openjverein-sync.js` oben `SYNC_ROOT = "C:\\Pfad\\zu\\openjverein-n8n-sync"` setzen (Jameica hat oft keine ENV).
+
 ## Architektur (kurz)
 
 1. Jameica wie gewohnt starten; Sync-Script unter **Einstellungen → Scripting** registrieren.
@@ -78,10 +80,7 @@ Wenn der Start mit Hello-World hängt: in der Datei `STAGE_SHUTDOWN_HOOK = false
 Nur wenn Hello-World **Start + Shutdown-Marker** ok waren:
 
 1. Hello-World aus Scripting entfernen (oder deaktiviert lassen).
-2. **SYNC_ROOT-Checkliste** (ohne das kein Export):
-   - In `scripts/jameica-openjverein-sync.js` `SYNC_ROOT = "…"` auf den **absoluten Repo-Pfad** setzen **oder**
-   - `OPENJVEREIN_N8N_SYNC_ROOT` in der Umgebung von Jameica setzen (nicht nur in einer fremden Shell).
-   - Pfad muss existieren und `scripts/export-trigger.(sh|cmd)` sowie `.env` enthalten.
+2. **SYNC_ROOT** oben in `scripts/jameica-openjverein-sync.js` setzen (Platzhalter `C:\\path\\to\\…` ersetzen) — sonst `root-fail` / `spawn-fail`, kein Webhook. Optional ENV `OPENJVEREIN_N8N_SYNC_ROOT`; sonst Fallback über den registrierten Script-Pfad, falls Scripting ihn liefert. Pfad muss `scripts/export-trigger.(cmd|sh)` und `.env` enthalten.
 3. Scripting → `scripts/jameica-openjverein-sync.js` hinzufügen → Speichern → Jameica neu starten.
 4. Sauber beenden (**Datei → Beenden**, kein Kill) → Marker + `output/einwilligungen.*` + n8n prüfen.
 
