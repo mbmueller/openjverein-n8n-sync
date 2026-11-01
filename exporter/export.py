@@ -459,10 +459,17 @@ def discover_h2_jars(roots: list[Path]) -> list[Path]:
     return sorted(_unique_paths(found), key=_jar_sort_key, reverse=True)
 
 
-def resolve_h2_jdbc_jar(configured: str | None, h2_db_path: str | None = None) -> Path | None:
+def resolve_h2_jdbc_jar(
+    configured: str | None, h2_db_path: str | None = None
+) -> tuple[Path | None, str]:
     """
     Use H2_JDBC_JAR if the file exists; otherwise discover under JAMEICA_HOME /
     Program Files / %USERPROFILE%\\.jameica plugin+lib trees.
+
+    Returns (path, source) where source is:
+      - ``env`` — explicit H2_JDBC_JAR pointed at an existing file
+      - ``discovery`` — auto-picked (or env path was missing/stale)
+      - ``missing`` — nothing found
 
     Auto-pick prefers h2-1.4.*.jar (format-1 OpenJVerein DBs) over H2 2.x, and
     non-migration-enabled paths over migration-h2/enabled forks.
@@ -470,12 +477,12 @@ def resolve_h2_jdbc_jar(configured: str | None, h2_db_path: str | None = None) -
     if configured:
         p = Path(configured).expanduser()
         if p.is_file():
-            return p.resolve()
+            return p.resolve(), "env"
         # Placeholder or stale path — fall through to discovery
 
     jars = discover_h2_jars(jameica_home_candidates(h2_db_path))
     if not jars:
-        return None
+        return None, "missing"
     # Prefer lib/h2/*.jar (and disabled migration) over enabled migration forks when possible
     preferred: list[Path] = []
     secondary: list[Path] = []
@@ -486,7 +493,36 @@ def resolve_h2_jdbc_jar(configured: str | None, h2_db_path: str | None = None) -
         else:
             preferred.append(j)
     pick = preferred or secondary
-    return pick[0] if pick else None
+    if pick:
+        return pick[0], "discovery"
+    return None, "missing"
+
+
+def log_h2_jdbc_jar(trigger: str, cfg: dict[str, Any], *, configured: str | None = None) -> None:
+    """Prominent TEMP marker + export-*.log line for resolved jar path and source.
+
+    Written on every run so Mars / hang diagnosis can see env vs discovery without
+    digging through progress noise. Full path (not basename); no secrets.
+    """
+    path = cfg.get("h2_jdbc_jar")
+    source = str(cfg.get("h2_jdbc_jar_source") or "missing")
+    path_s = str(path) if path else "-"
+    jar_name = Path(path_s).name if path and path_s != "-" else "-"
+    env_raw = configured if configured is not None else env("H2_JDBC_JAR")
+    env_note = ""
+    if source == "discovery" and env_raw:
+        # Env was set but file missing/stale → discovery won
+        env_note = f" env_stale={env_raw}"
+    elif source == "missing" and env_raw:
+        env_note = f" env_unset_or_missing={env_raw}"
+    line = (
+        f"H2_JDBC_JAR source={source} jar={jar_name} path={path_s}{env_note}"
+    )
+    # Dedicated TEMP (+ logs/) marker — easy to find after Datei→Beenden
+    write_diag(f"{DIAG_PREFIX}h2-jdbc-jar.txt", line)
+    append_export_log(trigger, line)
+    progress(trigger, "h2_jdbc_jar", f"source={source} jar={jar_name} path={path_s}")
+    print(f"[exporter] {line}", flush=True)
 
 
 def load_config(env_file: Path | None) -> tuple[dict[str, Any], Path | None]:
@@ -504,7 +540,7 @@ def load_config(env_file: Path | None) -> tuple[dict[str, Any], Path | None]:
 
     h2_db = env("H2_DB_PATH")
     h2_jar_env = env("H2_JDBC_JAR")
-    resolved_jar = resolve_h2_jdbc_jar(h2_jar_env, h2_db)
+    resolved_jar, jar_source = resolve_h2_jdbc_jar(h2_jar_env, h2_db)
 
     cfg = {
         "webhook_url": env("N8N_WEBHOOK_URL"),
@@ -514,6 +550,7 @@ def load_config(env_file: Path | None) -> tuple[dict[str, Any], Path | None]:
         "h2_password": env("H2_PASSWORD", "") or "",
         "h2_jdbc_jar": str(resolved_jar) if resolved_jar else h2_jar_env,
         "h2_jdbc_jar_resolved": resolved_jar is not None,
+        "h2_jdbc_jar_source": jar_source,
         "output_dir": Path(env("OUTPUT_DIR", str(root / "output")) or (root / "output")),
         "outbox_dir": Path(env("OUTBOX_DIR", str(root / "outbox")) or (root / "outbox")),
     }
@@ -616,11 +653,13 @@ def connect_h2(cfg: dict[str, Any], trigger: str = "manual"):
     if jar_path is None or not jar_path.is_file():
         progress(trigger, "resolve_h2_jar")
         # Second chance if load_config ran before install appeared
-        found = resolve_h2_jdbc_jar(env("H2_JDBC_JAR"), db)
+        found, found_source = resolve_h2_jdbc_jar(env("H2_JDBC_JAR"), db)
         if found is not None:
             jar_path = found
             cfg["h2_jdbc_jar"] = str(found)
             cfg["h2_jdbc_jar_resolved"] = True
+            cfg["h2_jdbc_jar_source"] = found_source
+            log_h2_jdbc_jar(trigger, cfg)
     if jar_path is None or not jar_path.is_file():
         raise RuntimeError(
             "H2_JDBC_JAR nicht gefunden (Datei fehlt): set path to h2-*.jar "
@@ -866,22 +905,20 @@ def run(
         progress(trigger, "load_config")
         cfg, resolved_env = load_config(env_file)
         jar_name = Path(str(cfg["h2_jdbc_jar"])).name if cfg.get("h2_jdbc_jar") else "-"
+        jar_source = cfg.get("h2_jdbc_jar_source") or "missing"
         progress(
             trigger,
             "config_loaded",
             f"env={'1' if resolved_env else '0'} "
+            f"jar_source={jar_source} "
             f"jar_resolved={'1' if cfg.get('h2_jdbc_jar_resolved') else '0'} "
             f"jar={jar_name} "
             f"webhook_host={webhook_host(cfg.get('webhook_url'))}",
         )
         cfg["output_dir"].mkdir(parents=True, exist_ok=True)
         cfg["outbox_dir"].mkdir(parents=True, exist_ok=True)
-        if cfg.get("h2_jdbc_jar_resolved") and cfg.get("h2_jdbc_jar"):
-            append_export_log(
-                trigger,
-                f"H2_JDBC_JAR ok path={cfg['h2_jdbc_jar']} "
-                "(explicit .env or auto-discovered; prefers h2-1.4.* over 2.x)",
-            )
+        # Always: full path + env|discovery|missing → TEMP marker + export-*.log
+        log_h2_jdbc_jar(trigger, cfg)
 
         if resolved_env is None:
             rc = fail(

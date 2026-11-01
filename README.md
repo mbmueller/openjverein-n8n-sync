@@ -98,7 +98,7 @@ Fehler `reason=h2_jar_missing` bedeutet: JayDeBeApi braucht die Datei `h2-*.jar`
 
 In `.env` setzen, z. B. `H2_JDBC_JAR=E:/path/to/h2-1.4.199.jar` (unquoted, Forward-Slashes) — **nur lokal**. Optional `JAMEICA_HOME` auf denselben Programmordner setzen.
 
-Der Exporter sucht automatisch unter `JAMEICA_HOME` / `JAMEICA_BIN`, `%USERPROFILE%\.jameica`, Program Files und Eltern von `H2_DB_PATH`, wenn `H2_JDBC_JAR` leer ist oder die Datei fehlt. Auto-Discovery **bevorzugt `h2-1.4.*.jar` vor H2 2.x**. Expliziter Pfad zur passenden Major-Version bleibt die zuverlässigste Variante; den gewählten Pfad schreibt der Exporter nach `logs/export-*.log` (`H2_JDBC_JAR ok path=…`).
+Der Exporter sucht automatisch unter `JAMEICA_HOME` / `JAMEICA_BIN`, `%USERPROFILE%\.jameica`, Program Files und Eltern von `H2_DB_PATH`, wenn `H2_JDBC_JAR` leer ist oder die Datei fehlt. Auto-Discovery **bevorzugt `h2-1.4.*.jar` vor H2 2.x**. Expliziter Pfad zur passenden Major-Version bleibt die zuverlässigste Variante. **Jeder Lauf** schreibt den aufgelösten Pfad plus Quelle (`source=env` | `discovery` | `missing`) prominent nach `%TEMP%\ojv-n8n-sync-h2-jdbc-jar.txt` und `logs/export-*.log` (Zeile `H2_JDBC_JAR source=… path=…`).
 
 ### H2_DB_PATH (OpenJVerein-Datenbank)
 
@@ -200,7 +200,8 @@ Zusätzlich, wenn `SYNC_ROOT` ok: `<Repo>/logs/ojv-n8n-sync-*.txt` und `logs/exp
 | `ojv-n8n-sync-spawn-exit.txt` | `export-trigger exit` detached gestartet |
 | `ojv-n8n-sync-trigger-spawned.txt` | Trigger-Prozess läuft |
 | `ojv-n8n-sync-exporter-start.txt` | Python-Exporter gestartet |
-| `ojv-n8n-sync-exporter-progress.txt` | Letzte Stufe (`stage=load_config` / `h2_connect` / `http_post` / …) — Hang-Ort |
+| `ojv-n8n-sync-h2-jdbc-jar.txt` | Aufgelöster H2-JAR-Pfad + `source=env` (`.env`) bzw. `discovery` / `missing` — jeder Lauf |
+| `ojv-n8n-sync-exporter-progress.txt` | Letzte Stufe (`stage=load_config` / `h2_jdbc_jar` / `h2_connect` / `http_post` / …) — Hang-Ort |
 | `ojv-n8n-sync-exporter-http.txt` | Webhook POST start/OK/FAIL inkl. **Host** (keine Secrets) |
 | `ojv-n8n-sync-exporter-success.txt` | Export + Webhook OK |
 | `ojv-n8n-sync-spawn-fail.txt` / `exporter-fail.txt` | Pfad/Spawn/H2/Webhook — immer `reason=… rc=<Zahl>` (nie leeres `rc=`) |
