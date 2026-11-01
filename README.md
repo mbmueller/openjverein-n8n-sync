@@ -68,6 +68,20 @@ Optional Override: absoluter `PYTHON=C:\Pfad\zu\python.exe` in der Umgebung oder
 
 Keine echten Secrets und **keine persönlichen Absolutpfade** ins Git committen (nur lokale `.env`).
 
+### Windows-Pfade in `.env` (wichtig)
+
+**Keine doppelten Anführungszeichen** um Pfade. `python-dotenv` wertet Escape-Sequenzen in `"…"` aus — z. B. wird `\t` in `E:\path\to\…` zum Tab, und Pfade mit `h2-2…` können beschädigt werden.
+
+Bevorzugt **Forward-Slashes, unquoted**:
+
+```env
+H2_JDBC_JAR=E:/path/to/h2-2.3.232.jar
+H2_DB_PATH=E:/Users/YOU/.jameica/openjverein/h2db/openjverein
+JAMEICA_HOME=E:/path/to/jameica
+```
+
+Backslashes ohne Quotes sind oft ok, Quotes um Windows-Pfade nicht. Der Exporter lädt `.env` raw (ohne Escape-Decoding) und strippt restliche umschließende Quotes.
+
 ### H2-JDBC-JAR finden (Windows / Jameica / OpenJVerein)
 
 Fehler `reason=h2_jar_missing` bedeutet: JayDeBeApi braucht die Datei `h2-*.jar` (Klasse `org.h2.Driver`). Die JAR kommt mit Jameica, nicht mit diesem Repo.
@@ -80,7 +94,7 @@ Fehler `reason=h2_jar_missing` bedeutet: JayDeBeApi braucht die Datei `h2-*.jar`
 2. **Plugin-JARs** unter dem Workdir: `%USERPROFILE%\.jameica\plugins\**\h2-*.jar` (und ggf. unter dem Install-`plugins\`-Ordner).
 3. Typische Install-Wurzeln: `C:\Program Files\jameica*`, `C:\Programme\jameica*`, portable Ordner neben der `.exe`.
 
-In `.env` setzen, z. B. `H2_JDBC_JAR=C:\path\to\jameica\lib\h2\h2-2.x.x.jar` — **nur lokal**. Optional `JAMEICA_HOME` auf denselben Programmordner setzen.
+In `.env` setzen, z. B. `H2_JDBC_JAR=E:/path/to/jameica/lib/h2/h2-2.x.x.jar` (unquoted, Forward-Slashes) — **nur lokal**. Optional `JAMEICA_HOME` auf denselben Programmordner setzen.
 
 Der Exporter sucht automatisch unter `JAMEICA_HOME` / `JAMEICA_BIN`, `%USERPROFILE%\.jameica`, Program Files und Eltern von `H2_DB_PATH`, wenn `H2_JDBC_JAR` leer ist oder die Datei fehlt. Expliziter Pfad bleibt die zuverlässigste Variante.
 
@@ -154,7 +168,7 @@ Typische Ursachen (oft kombiniert):
 | `.env` fehlt / `N8N_WEBHOOK_URL` fehlt oder Platzhalter | `exporter-fail` mit `reason=missing_env_file` bzw. `reason=missing_webhook` |
 | `python` nicht auf PATH und keine `.venv` | `exporter-fail` `reason=python_not_found` — venv anlegen oder `PYTHON=` setzen |
 | `jaydebeapi` fehlt (System-Python ohne Deps) | `exporter-fail` `reason=h2_connect` Detail `jaydebeapi fehlt` — `.venv` + `pip install -r exporter/requirements.txt` (Trigger nutzt `.venv` automatisch) |
-| `H2_JDBC_JAR` fehlt / falscher Pfad | `exporter-fail` `reason=h2_jar_missing` — unter Jameica `lib\h2\` bzw. `.jameica\plugins` nach `h2-*.jar` suchen (Abschnitt oben); `JAMEICA_HOME` setzen |
+| `H2_JDBC_JAR` fehlt / falscher Pfad / in `.env` mit `"…"` gequotet | `exporter-fail` `reason=h2_jar_missing` — JAR unter Jameica `lib\h2\` suchen; **keine** doppelten Quotes (Escape `\t`/`\2`); `H2_JDBC_JAR=E:/path/to/h2-2.x.x.jar` |
 | `H2_DB_PATH` falsch | `exporter-fail` `reason=h2_path` — typisch `%USERPROFILE%\.jameica\openjverein\h2db\openjverein` ohne `.mv.db` |
 | H2 noch gelockt (Jameica nicht weg) | `exporter-fail` `reason=jdbc_lock` — Settle erhöhen / sauber beenden |
 | H2-Connect hängt / Timeout | `exporter-progress` bleibt bei `h2_connect` → danach `reason=h2_connect_timeout` (oder `watchdog`) |

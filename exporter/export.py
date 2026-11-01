@@ -34,10 +34,62 @@ except Exception:  # noqa: BLE001
     pass
 
 try:
-    from dotenv import load_dotenv
+    from dotenv import load_dotenv as _load_dotenv_lib
 except ImportError:  # pragma: no cover
-    def load_dotenv(*_a, **_k):  # type: ignore[misc]
+    def _load_dotenv_lib(*_a, **_k):  # type: ignore[misc]
         return False
+
+
+def _strip_wrapping_quotes(value: str) -> str:
+    v = value.strip()
+    if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+        return v[1:-1]
+    return v
+
+
+def load_dotenv_raw(env_file: Path, *, override: bool = False) -> bool:
+    """Load KEY=VALUE from .env without escape decoding (Windows-path safe).
+
+    python-dotenv interprets sequences like ``\\t`` inside double-quoted values,
+    which breaks Windows paths such as ``E:\\path\\to\\h2-2.3.232.jar``
+    (``\\t`` → TAB, ``\\2``-style damage). Prefer unquoted forward slashes in
+    `.env`; this loader still strips residual wrapping quotes and keeps
+    backslashes literal. Existing process env wins unless override=True.
+    """
+    try:
+        text = env_file.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    loaded = False
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.lower().startswith("export "):
+            line = line[7:].lstrip()
+        if "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key = key.strip()
+        if not key or any(c.isspace() for c in key):
+            continue
+        val = _strip_wrapping_quotes(val.strip())
+        if not override and key in os.environ:
+            continue
+        os.environ[key] = val
+        loaded = True
+    return loaded
+
+
+def load_dotenv(env_file: Path | str | None = None, **kwargs: Any) -> bool:
+    """Prefer raw path-safe loader; fall back to python-dotenv if needed."""
+    if env_file is None:
+        return bool(_load_dotenv_lib(**kwargs))
+    path = Path(env_file)
+    if path.is_file():
+        override = bool(kwargs.get("override", False))
+        return load_dotenv_raw(path, override=override)
+    return bool(_load_dotenv_lib(env_file, **kwargs))
 
 SQL_EXPORT = """
 SELECT m.id,
@@ -236,7 +288,8 @@ def env(name: str, default: str | None = None) -> str | None:
     v = os.environ.get(name)
     if v is None or v == "":
         return default
-    return v
+    # cmd.exe for /f and quoted .env lines may leave wrapping quotes on paths
+    return _strip_wrapping_quotes(v)
 
 
 def as_bool(v: Any) -> bool:

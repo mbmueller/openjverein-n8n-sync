@@ -75,6 +75,17 @@ if not errorlevel 1 (
 )
 exit /b 1
 
+REM Sleep ~N seconds without `timeout`. Under redirected stdin (Jameica ProcessBuilder)
+REM `timeout` fails with "Eingabeumleitung wird nicht unterstützt" and returns immediately.
+REM `ping -n N+1 127.0.0.1` waits ~N seconds and tolerates stdout redirect.
+:sleep_seconds
+set "_sleep_n=%~1"
+if not defined _sleep_n set "_sleep_n=0"
+set /a _ping_n=_sleep_n+1
+if !_ping_n! LSS 1 set "_ping_n=1"
+ping -n !_ping_n! 127.0.0.1 >NUL 2>&1
+exit /b 0
+
 :main
 if "%MODE%"=="" (
   echo Fehler: Modus fehlt ^(start^|exit^) 1>&2
@@ -137,7 +148,7 @@ if /I "%MODE%"=="exit" (
     :wait_loop
     tasklist /FI "PID eq %WAIT_PID%" 2>NUL | find "%WAIT_PID%" >NUL
     if not errorlevel 1 (
-      timeout /T 1 /NOBREAK >NUL
+      call :sleep_seconds 1
       set /a waited+=1
       if !waited! GEQ !EXIT_PID_WAIT_SECONDS! (
         echo [export-trigger] Timeout ^(!EXIT_PID_WAIT_SECONDS!s^) — Export trotzdem versuchen 1>&2
@@ -147,7 +158,7 @@ if /I "%MODE%"=="exit" (
     )
     :wait_done
     if not defined EXIT_H2_SETTLE_SECONDS set "EXIT_H2_SETTLE_SECONDS=2"
-    timeout /T !EXIT_H2_SETTLE_SECONDS! /NOBREAK >NUL
+    call :sleep_seconds !EXIT_H2_SETTLE_SECONDS!
   )
   set "EXPORT_LOG=%LOG_DIR%\export-jameica_exit.log"
   echo [export-trigger] Exporter ^(jameica_exit^)… log=!EXPORT_LOG!
