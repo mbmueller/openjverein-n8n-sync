@@ -131,6 +131,166 @@ def as_bool(v: Any) -> bool:
     return s in {"1", "true", "t", "ja", "yes", "y", "j"}
 
 
+def _unique_paths(paths: list[Path]) -> list[Path]:
+    seen: set[str] = set()
+    out: list[Path] = []
+    for p in paths:
+        try:
+            key = str(p.expanduser())
+        except (OSError, RuntimeError):
+            key = str(p)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(Path(key))
+    return out
+
+
+def jameica_home_candidates(h2_db_path: str | None = None) -> list[Path]:
+    """Install/data roots that commonly contain h2-*.jar (no personal defaults committed)."""
+    homes: list[Path] = []
+    for key in ("JAMEICA_HOME", "JAMEICA_DIR"):
+        raw = env(key)
+        if raw:
+            homes.append(Path(raw))
+
+    jbin = env("JAMEICA_BIN")
+    if jbin:
+        p = Path(jbin)
+        homes.append(p.parent if p.suffix else p)
+
+    # User Jameica workdir (plugins often live here on Windows)
+    home = Path.home()
+    homes.append(home / ".jameica")
+    # macOS alternate
+    homes.append(home / "Library" / "jameica")
+
+    if os.name == "nt":
+        for env_key in ("ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA", "ProgramW6432"):
+            base = os.environ.get(env_key)
+            if not base:
+                continue
+            base_p = Path(base)
+            homes.append(base_p / "jameica")
+            homes.append(base_p / "Jameica")
+            try:
+                for child in sorted(base_p.glob("jameica*")):
+                    if child.is_dir():
+                        homes.append(child)
+            except OSError:
+                pass
+        # German Windows "Programme" junction / legacy docs
+        for prog in (Path(r"C:\Programme"), Path(r"C:\Program Files"), Path(r"C:\Program Files (x86)")):
+            homes.append(prog / "jameica")
+            homes.append(prog / "Jameica")
+            try:
+                for child in sorted(prog.glob("jameica*")):
+                    if child.is_dir():
+                        homes.append(child)
+            except OSError:
+                pass
+
+    # Derive from H2_DB_PATH parents (…/.jameica/openjverein/h2db/name → …/.jameica)
+    if h2_db_path:
+        db = Path(h2_db_path)
+        for parent in list(db.parents)[:6]:
+            homes.append(parent)
+            if parent.name.lower() in {".jameica", "jameica"}:
+                break
+
+    return _unique_paths(homes)
+
+
+def _is_h2_jdbc_jar(path: Path) -> bool:
+    name = path.name.lower()
+    if not name.endswith(".jar"):
+        return False
+    # h2.jar, h2-2.3.232.jar, h2-1.4.199-fork.jar — skip unrelated *h2* names
+    return name == "h2.jar" or name.startswith("h2-")
+
+
+def _jar_sort_key(path: Path) -> tuple[int, tuple[int, ...], str]:
+    """Prefer versioned h2-*.jar with higher semver; plain h2.jar last among peers."""
+    name = path.name.lower()
+    if name == "h2.jar":
+        return (0, (0,), name)
+    # h2-2.3.232.jar / h2-1.4.199-fork.jar
+    ver_part = name[3:-4] if name.startswith("h2-") and name.endswith(".jar") else name
+    nums: list[int] = []
+    for chunk in ver_part.replace("-", ".").split("."):
+        if chunk.isdigit():
+            nums.append(int(chunk))
+        else:
+            break
+    return (1, tuple(nums), name)
+
+
+def discover_h2_jars(roots: list[Path]) -> list[Path]:
+    """Search common relative locations under Jameica homes / plugin trees."""
+    found: list[Path] = []
+    rel_globs = (
+        "lib/h2/h2.jar",
+        "lib/h2/h2-*.jar",
+        "lib/h2/*.jar",
+        "lib/h2/migration-h2/disabled/h2*.jar",
+        "lib/h2/migration-h2/enabled/h2*.jar",
+        "lib/h2.jar",
+        "lib/h2-*.jar",
+        "plugins/*/lib/h2.jar",
+        "plugins/*/lib/h2-*.jar",
+        "plugins/*/lib/**/h2*.jar",
+        "plugins/*/h2*.jar",
+    )
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for pattern in rel_globs:
+            try:
+                for hit in root.glob(pattern):
+                    if hit.is_file() and _is_h2_jdbc_jar(hit):
+                        found.append(hit.resolve())
+            except OSError:
+                continue
+        # Shallow fallback: any h2-*.jar under plugins (depth-limited via rglob on plugins only)
+        plugins = root / "plugins"
+        if plugins.is_dir():
+            try:
+                for hit in plugins.rglob("h2*.jar"):
+                    if hit.is_file() and _is_h2_jdbc_jar(hit):
+                        found.append(hit.resolve())
+            except OSError:
+                pass
+
+    return sorted(_unique_paths(found), key=_jar_sort_key, reverse=True)
+
+
+def resolve_h2_jdbc_jar(configured: str | None, h2_db_path: str | None = None) -> Path | None:
+    """
+    Use H2_JDBC_JAR if the file exists; otherwise discover under JAMEICA_HOME /
+    Program Files / %USERPROFILE%\\.jameica plugin+lib trees.
+    """
+    if configured:
+        p = Path(configured).expanduser()
+        if p.is_file():
+            return p.resolve()
+        # Placeholder or stale path — fall through to discovery
+
+    jars = discover_h2_jars(jameica_home_candidates(h2_db_path))
+    if not jars:
+        return None
+    # Prefer lib/h2/*.jar (and disabled migration) over enabled migration forks when possible
+    preferred: list[Path] = []
+    secondary: list[Path] = []
+    for j in jars:
+        parts = {x.lower() for x in j.parts}
+        if "enabled" in parts and "migration-h2" in parts:
+            secondary.append(j)
+        else:
+            preferred.append(j)
+    pick = preferred or secondary
+    return pick[0] if pick else None
+
+
 def load_config(env_file: Path | None) -> tuple[dict[str, Any], Path | None]:
     """Returns (cfg, resolved_env_path). resolved_env_path is None if no .env loaded."""
     root = repo_root()
@@ -144,13 +304,18 @@ def load_config(env_file: Path | None) -> tuple[dict[str, Any], Path | None]:
             load_dotenv(default_env)
             resolved = default_env
 
+    h2_db = env("H2_DB_PATH")
+    h2_jar_env = env("H2_JDBC_JAR")
+    resolved_jar = resolve_h2_jdbc_jar(h2_jar_env, h2_db)
+
     cfg = {
         "webhook_url": env("N8N_WEBHOOK_URL"),
         "webhook_secret": env("N8N_WEBHOOK_SECRET", ""),
-        "h2_db_path": env("H2_DB_PATH"),
+        "h2_db_path": h2_db,
         "h2_user": env("H2_USER", "sa") or "sa",
         "h2_password": env("H2_PASSWORD", "") or "",
-        "h2_jdbc_jar": env("H2_JDBC_JAR"),
+        "h2_jdbc_jar": str(resolved_jar) if resolved_jar else h2_jar_env,
+        "h2_jdbc_jar_resolved": resolved_jar is not None,
         "output_dir": Path(env("OUTPUT_DIR", str(root / "output")) or (root / "output")),
         "outbox_dir": Path(env("OUTBOX_DIR", str(root / "outbox")) or (root / "outbox")),
     }
@@ -215,14 +380,29 @@ def connect_h2(cfg: dict[str, Any]):
             "export-trigger nutzt .venv automatisch; sonst: pip install -r exporter/requirements.txt"
         ) from e
 
-    jar = cfg["h2_jdbc_jar"]
+    jar = cfg.get("h2_jdbc_jar")
     db = cfg["h2_db_path"]
-    if not jar:
-        raise RuntimeError("H2_JDBC_JAR fehlt in .env")
-    if not Path(str(jar)).is_file():
-        raise RuntimeError(f"H2_JDBC_JAR nicht gefunden (Datei fehlt): set path to h2-*.jar")
+    jar_path = Path(str(jar)).expanduser() if jar else None
+    if jar_path is None or not jar_path.is_file():
+        # Second chance if load_config ran before install appeared
+        found = resolve_h2_jdbc_jar(env("H2_JDBC_JAR"), db)
+        if found is not None:
+            jar_path = found
+            cfg["h2_jdbc_jar"] = str(found)
+            cfg["h2_jdbc_jar_resolved"] = True
+    if jar_path is None or not jar_path.is_file():
+        raise RuntimeError(
+            "H2_JDBC_JAR nicht gefunden (Datei fehlt): set path to h2-*.jar "
+            "(Windows: unter Jameica-Install lib\\h2\\ oder "
+            "%USERPROFILE%\\.jameica\\plugins\\**\\h2-*.jar suchen; "
+            "optional JAMEICA_HOME setzen — siehe README)"
+        )
     if not db:
-        raise RuntimeError("H2_DB_PATH fehlt in .env")
+        raise RuntimeError(
+            "H2_DB_PATH fehlt in .env "
+            "(typisch: %USERPROFILE%\\.jameica\\openjverein\\h2db\\openjverein "
+            "ohne .mv.db/.h2.db — siehe README)"
+        )
     # Do not embed absolute personal paths in raised messages beyond env key names
     # ACCESS_MODE_DATA=r: readonly, kein AUTO_SERVER
     url = f"jdbc:h2:file:{db};ACCESS_MODE_DATA=r;IFEXISTS=TRUE"
@@ -230,7 +410,7 @@ def connect_h2(cfg: dict[str, Any]):
         "org.h2.Driver",
         url,
         [cfg["h2_user"], cfg["h2_password"]],
-        jar,
+        str(jar_path),
     )
 
 
@@ -384,6 +564,11 @@ def run(
     cfg, resolved_env = load_config(env_file)
     cfg["output_dir"].mkdir(parents=True, exist_ok=True)
     cfg["outbox_dir"].mkdir(parents=True, exist_ok=True)
+    if cfg.get("h2_jdbc_jar_resolved") and cfg.get("h2_jdbc_jar"):
+        append_export_log(
+            trigger,
+            f"H2_JDBC_JAR ok (file present or auto-discovered under Jameica homes)",
+        )
 
     if resolved_env is None:
         return fail(

@@ -56,12 +56,43 @@ Optional Override: absoluter `PYTHON=C:\Pfad\zu\python.exe` in der Umgebung oder
 |----------|-----------|
 | `N8N_WEBHOOK_URL` | z. B. `https://<dein-n8n>/webhook/einwilligung-bildnutzung` |
 | `N8N_WEBHOOK_SECRET` | **optional**, wenn n8n-Webhook-Auth = None; sonst gemeinsames Secret → Header `X-Webhook-Secret` (leer/Platzhalter → Header wird weggelassen) |
-| `H2_DB_PATH` | H2-Datei **ohne** `.mv.db`-Suffix |
-| `H2_JDBC_JAR` | Pfad zur `h2-*.jar` |
+| `H2_DB_PATH` | H2-Datei **ohne** `.mv.db` / `.h2.db`-Suffix (siehe unten) |
+| `H2_JDBC_JAR` | Pfad zur `h2-*.jar` (siehe unten; Auto-Discovery falls Datei fehlt) |
+| `JAMEICA_HOME` | optional: Jameica-Installationsordner — verbessert JAR-Suche |
 | `EXIT_H2_SETTLE_SECONDS` | Pause nach Exit vor H2-Öffnen (Default `2`) |
 | `OPENJVEREIN_N8N_SYNC_ROOT` | optional statt `SYNC_ROOT` in der `.js` |
 
-Keine echten Secrets ins Git committen.
+Keine echten Secrets und **keine persönlichen Absolutpfade** ins Git committen (nur lokale `.env`).
+
+### H2-JDBC-JAR finden (Windows / Jameica / OpenJVerein)
+
+Fehler `reason=h2_jar_missing` bedeutet: JayDeBeApi braucht die Datei `h2-*.jar` (Klasse `org.h2.Driver`). Die JAR kommt mit Jameica, nicht mit diesem Repo.
+
+**Wo suchen (Explorer oder PowerShell `Get-ChildItem -Recurse -Filter 'h2-*.jar'`):**
+
+1. **Jameica-Programmordner** (dort liegt `jameica-win64.exe` / `jameica.exe`):
+   - `lib\h2\h2-*.jar` oder `lib\h2\h2.jar`
+   - neuere Builds: `lib\h2\migration-h2\disabled\h2-*.jar` (Default, wenn `migration-h2=false`) bzw. `…\enabled\…`
+2. **Plugin-JARs** unter dem Workdir: `%USERPROFILE%\.jameica\plugins\**\h2-*.jar` (und ggf. unter dem Install-`plugins\`-Ordner).
+3. Typische Install-Wurzeln: `C:\Program Files\jameica*`, `C:\Programme\jameica*`, portable Ordner neben der `.exe`.
+
+In `.env` setzen, z. B. `H2_JDBC_JAR=C:\path\to\jameica\lib\h2\h2-2.x.x.jar` — **nur lokal**. Optional `JAMEICA_HOME` auf denselben Programmordner setzen.
+
+Der Exporter sucht automatisch unter `JAMEICA_HOME` / `JAMEICA_BIN`, `%USERPROFILE%\.jameica`, Program Files und Eltern von `H2_DB_PATH`, wenn `H2_JDBC_JAR` leer ist oder die Datei fehlt. Expliziter Pfad bleibt die zuverlässigste Variante.
+
+### H2_DB_PATH (OpenJVerein-Datenbank)
+
+Pfad zur H2-Datenbank **ohne** Dateiendung `.mv.db` / `.h2.db`.
+
+Typisch im **Jameica-Workdir** (nicht im Programmordner):
+
+| OS | Übliche Lage |
+|----|----------------|
+| Windows | `%USERPROFILE%\.jameica\openjverein\h2db\openjverein` |
+| Linux | `~/.jameica/openjverein/h2db/openjverein` |
+| macOS | `~/.jameica/…` oder `~/Library/jameica/…` |
+
+Ältere Installationen: `…\.jameica\jverein\h2db\jverein`. Wenn die Datei `openjverein.mv.db` heißt, ist `H2_DB_PATH=…\h2db\openjverein` (Suffix weglassen). Anderes Workdir (`jameica -f …`): dort unter `openjverein\h2db\` bzw. `jverein\h2db\` suchen.
 
 ---
 
@@ -119,7 +150,8 @@ Typische Ursachen (oft kombiniert):
 | `.env` fehlt / `N8N_WEBHOOK_URL` fehlt oder Platzhalter | `exporter-fail` mit `reason=missing_env_file` bzw. `reason=missing_webhook` |
 | `python` nicht auf PATH und keine `.venv` | `exporter-fail` `reason=python_not_found` — venv anlegen oder `PYTHON=` setzen |
 | `jaydebeapi` fehlt (System-Python ohne Deps) | `exporter-fail` `reason=h2_connect` Detail `jaydebeapi fehlt` — `.venv` + `pip install -r exporter/requirements.txt` (Trigger nutzt `.venv` automatisch) |
-| `H2_DB_PATH` / `H2_JDBC_JAR` falsch | `exporter-fail` `reason=h2_path` / `h2_jar_missing` — siehe `logs/export-*.log` |
+| `H2_JDBC_JAR` fehlt / falscher Pfad | `exporter-fail` `reason=h2_jar_missing` — unter Jameica `lib\h2\` bzw. `.jameica\plugins` nach `h2-*.jar` suchen (Abschnitt oben); `JAMEICA_HOME` setzen |
+| `H2_DB_PATH` falsch | `exporter-fail` `reason=h2_path` — typisch `%USERPROFILE%\.jameica\openjverein\h2db\openjverein` ohne `.mv.db` |
 | H2 noch gelockt (Jameica nicht weg) | `exporter-fail` `reason=jdbc_lock` — Settle erhöhen / sauber beenden |
 | Webhook-HTTP-Fehler | `exporter-http` FAIL + `exporter-fail` `reason=webhook_http` + Outbox |
 | Alter Hang-Hook noch registriert | Start freeze — Recovery unten |
