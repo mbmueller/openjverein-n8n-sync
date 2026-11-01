@@ -42,7 +42,7 @@ chmod +x scripts/export-trigger.sh
 | Variable | Bedeutung |
 |----------|-----------|
 | `N8N_WEBHOOK_URL` | z. B. `https://<dein-n8n>/webhook/einwilligung-bildnutzung` |
-| `N8N_WEBHOOK_SECRET` | gemeinsames Secret; Header `X-Webhook-Secret` |
+| `N8N_WEBHOOK_SECRET` | **optional**, wenn n8n-Webhook-Auth = None; sonst gemeinsames Secret → Header `X-Webhook-Secret` (leer/Platzhalter → Header wird weggelassen) |
 | `H2_DB_PATH` | H2-Datei **ohne** `.mv.db`-Suffix |
 | `H2_JDBC_JAR` | Pfad zur `h2-*.jar` |
 | `EXIT_H2_SETTLE_SECONDS` | Pause nach Exit vor H2-Öffnen (Default `2`) |
@@ -80,7 +80,7 @@ Nur wenn Hello-World **Start + Shutdown-Marker** ok waren:
 
 1. Hello-World aus Scripting entfernen (oder deaktiviert lassen).
 2. **SYNC_ROOT** oben in `scripts/jameica-openjverein-sync.js` setzen (Platzhalter `C:\\path\\to\\…` ersetzen; **keinen** persönlichen Default committen) — sonst `root-fail` / `spawn-fail`, kein Webhook. Optional `OPENJVEREIN_N8N_SYNC_ROOT` nur wenn für den **Jameica-Prozess** gesetzt (nicht Shell-`.env`). Fallback über registrierten Script-Pfad, falls Scripting ihn liefert. Root muss `scripts/export-trigger.(cmd|sh)` und `.env` enthalten.
-3. In `.env`: echte `N8N_WEBHOOK_URL` + `N8N_WEBHOOK_SECRET` (kein `N8N_HOST_PLACEHOLDER` / `CHANGE_ME_…`), plus `H2_DB_PATH` / `H2_JDBC_JAR`.
+3. In `.env`: echte `N8N_WEBHOOK_URL` (kein `N8N_HOST_PLACEHOLDER`), plus `H2_DB_PATH` / `H2_JDBC_JAR`. `N8N_WEBHOOK_SECRET` nur wenn n8n ein Secret prüft — bei Auth=None leer lassen oder weglassen.
 4. Scripting → `scripts/jameica-openjverein-sync.js` hinzufügen → Speichern → Jameica neu starten.
 5. Sauber beenden (**Datei → Beenden**, kein Kill) → Marker + `logs/export-*.log` + `output/einwilligungen.*` + n8n prüfen.
 
@@ -168,7 +168,7 @@ Optional später: winziges Java-Plugin, das bei `SYSTEM_SHUTDOWN` `QueryMessage(
 3. Ordner-IDs setzen für:
    - `aktuell/` → `DRIVE_FOLDER_ID_AKTUELL_PLACEHOLDER`
    - `archiv/` → `DRIVE_FOLDER_ID_ARCHIV_PLACEHOLDER`
-4. Webhook-URL/Secret an lokale `.env` anbinden.
+4. Webhook-URL an lokale `.env` anbinden; Secret nur wenn der Workflow/Auth es verlangt.
 
 ## Drive-Layout
 

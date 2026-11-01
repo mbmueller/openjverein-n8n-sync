@@ -306,8 +306,11 @@ def post_webhook(cfg: dict[str, Any], payload: dict[str, Any]) -> None:
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     headers = {
         "Content-Type": "application/json; charset=utf-8",
-        "X-Webhook-Secret": cfg["webhook_secret"] or "",
     }
+    # Optional: only send header when a real secret is configured (n8n Auth=None → leave empty)
+    secret = (cfg.get("webhook_secret") or "").strip()
+    if secret and secret != "CHANGE_ME_WEBHOOK_SECRET":
+        headers["X-Webhook-Secret"] = secret
     req = Request(url, data=body, headers=headers, method="POST")
     with urlopen(req, timeout=http_timeout_seconds()) as resp:
         code = getattr(resp, "status", None) or resp.getcode()
@@ -391,7 +394,7 @@ def run(
         return fail(
             trigger,
             "missing_webhook",
-            "N8N_WEBHOOK_URL unset or still N8N_HOST_PLACEHOLDER — set real URL + N8N_WEBHOOK_SECRET in .env",
+            "N8N_WEBHOOK_URL unset or still N8N_HOST_PLACEHOLDER — set real URL in .env (N8N_WEBHOOK_SECRET optional if n8n has no auth)",
             rc=2,
         )
 

@@ -20,8 +20,8 @@
         "conditions": {
           "string": [
             {
-              "value1": "={{ $json.headers['x-webhook-secret'] || $json.headers['X-Webhook-Secret'] }}",
-              "value2": "={{ $env.N8N_WEBHOOK_SECRET || 'CHANGE_ME_WEBHOOK_SECRET' }}"
+              "value1": "={{ (function () { const exp = ($env.N8N_WEBHOOK_SECRET || '').trim(); if (!exp || exp === 'CHANGE_ME_WEBHOOK_SECRET') return 'ok'; const got = ($json.headers['x-webhook-secret'] || $json.headers['X-Webhook-Secret'] || ''); return got === exp ? 'ok' : 'fail'; })() }}",
+              "value2": "ok"
             }
           ]
         }
