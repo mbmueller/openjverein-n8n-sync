@@ -8,8 +8,7 @@ Synchronisiert die Zusatzfelder **`insta`**, **`website`**, **`flyer`** (Ja/Nein
 
 **Trigger:** Jameica **normal starten** (kein Launcher/Wrapper). Automation über **Jameica Scripting**. Kein Cron.
 
-**Pflicht:** In `scripts/jameica-openjverein-sync.js` oben `SYNC_ROOT = "C:\\Pfad\\zu\\openjverein-n8n-sync"` setzen (Jameica hat oft keine ENV).
-
+**Pflicht:** In `scripts/jameica-openjverein-sync.js` oben `SYNC_ROOT = "C:\\Pfad\\zu\\openjverein-n8n-sync"` setzen. `OPENJVEREIN_N8N_SYNC_ROOT` greift nur als **Jameica-Prozess-ENV** (Windows System/User oder Verknüpfung) — nicht aus einer Shell-`.env`.
 ## Architektur (kurz)
 
 1. Jameica wie gewohnt starten; Sync-Script unter **Einstellungen → Scripting** registrieren.
@@ -80,9 +79,10 @@ Wenn der Start mit Hello-World hängt: in der Datei `STAGE_SHUTDOWN_HOOK = false
 Nur wenn Hello-World **Start + Shutdown-Marker** ok waren:
 
 1. Hello-World aus Scripting entfernen (oder deaktiviert lassen).
-2. **SYNC_ROOT** oben in `scripts/jameica-openjverein-sync.js` setzen (Platzhalter `C:\\path\\to\\…` ersetzen) — sonst `root-fail` / `spawn-fail`, kein Webhook. Optional ENV `OPENJVEREIN_N8N_SYNC_ROOT`; sonst Fallback über den registrierten Script-Pfad, falls Scripting ihn liefert. Pfad muss `scripts/export-trigger.(cmd|sh)` und `.env` enthalten.
-3. Scripting → `scripts/jameica-openjverein-sync.js` hinzufügen → Speichern → Jameica neu starten.
-4. Sauber beenden (**Datei → Beenden**, kein Kill) → Marker + `output/einwilligungen.*` + n8n prüfen.
+2. **SYNC_ROOT** oben in `scripts/jameica-openjverein-sync.js` setzen (Platzhalter `C:\\path\\to\\…` ersetzen; **keinen** persönlichen Default committen) — sonst `root-fail` / `spawn-fail`, kein Webhook. Optional `OPENJVEREIN_N8N_SYNC_ROOT` nur wenn für den **Jameica-Prozess** gesetzt (nicht Shell-`.env`). Fallback über registrierten Script-Pfad, falls Scripting ihn liefert. Root muss `scripts/export-trigger.(cmd|sh)` und `.env` enthalten.
+3. In `.env`: echte `N8N_WEBHOOK_URL` + `N8N_WEBHOOK_SECRET` (kein `N8N_HOST_PLACEHOLDER` / `CHANGE_ME_…`), plus `H2_DB_PATH` / `H2_JDBC_JAR`.
+4. Scripting → `scripts/jameica-openjverein-sync.js` hinzufügen → Speichern → Jameica neu starten.
+5. Sauber beenden (**Datei → Beenden**, kein Kill) → Marker + `logs/export-*.log` + `output/einwilligungen.*` + n8n prüfen.
 
 ### Manueller Fallback / Test
 
@@ -100,10 +100,14 @@ Typische Ursachen (oft kombiniert):
 
 | Ursache | Wirkung |
 |---------|---------|
-| `SYNC_ROOT` / `OPENJVEREIN_N8N_SYNC_ROOT` leer oder falsch | Hook wird trotzdem registriert, aber Spawn schreibt `…-root-fail.txt` / `…-spawn-fail.txt` — **kein** Exporter |
+| `SYNC_ROOT` leer/Platzhalter; ENV nur in Shell-`.env` | Hook ok, aber `root-fail` / `spawn-fail` — **kein** Exporter. ENV nur für **Jameica-Prozess** |
 | `ENABLE_START_OUTBOX_FLUSH = false` (Default) | **Kein** Start-Webhook — Absicht; Export nur nach Beenden |
 | Nur Fenster schließen / Kill statt **Datei → Beenden** | JVM-Hook kann ausbleiben |
-| `.env` Platzhalter / H2-Pfad falsch | Trigger läuft, Webhook/H2 scheitert → Marker `…-exporter-http.txt` / `…-exporter-fail.txt`, ggf. Outbox |
+| `.env` fehlt / `N8N_WEBHOOK_URL` fehlt oder Platzhalter | `exporter-fail` mit `reason=missing_env_file` bzw. `reason=missing_webhook` |
+| `python` nicht auf PATH (Jameica-Spawn) | `exporter-fail` `reason=python_not_found` — Python installieren oder `PYTHON=` setzen |
+| `H2_DB_PATH` / `H2_JDBC_JAR` falsch | `exporter-fail` `reason=h2_path` / `h2_jar_missing` — siehe `logs/export-*.log` |
+| H2 noch gelockt (Jameica nicht weg) | `exporter-fail` `reason=jdbc_lock` — Settle erhöhen / sauber beenden |
+| Webhook-HTTP-Fehler | `exporter-http` FAIL + `exporter-fail` `reason=webhook_http` + Outbox |
 | Alter Hang-Hook noch registriert | Start freeze — Recovery unten |
 | Truthiness/`var e = events` auf globalem `events` | `eval-fail.txt`: `Invalid JavaScript value of type …ScriptingService$Events` — Sync-Script nutzt `events` **nicht** |
 
@@ -127,9 +131,10 @@ Zusätzlich, wenn `SYNC_ROOT` ok: `<Repo>/logs/ojv-n8n-sync-*.txt` und `logs/exp
 | `ojv-n8n-sync-trigger-spawned.txt` | Trigger-Prozess läuft |
 | `ojv-n8n-sync-exporter-start.txt` | Python-Exporter gestartet |
 | `ojv-n8n-sync-exporter-http.txt` | Webhook OK oder FAIL (ohne personenbezogene Daten) |
-| `ojv-n8n-sync-spawn-fail.txt` / `exporter-fail.txt` | Pfad/Spawn/H2-Fehler |
+| `ojv-n8n-sync-spawn-fail.txt` / `exporter-fail.txt` | Pfad/Spawn/H2/Webhook — immer `reason=… rc=<Zahl>` (nie leeres `rc=`) |
+| `logs/export-jameica_exit.log` | stdout/stderr + Traceback des letzten Exit-Exports |
 
-**Nach dem nächsten sauberen Beenden** mindestens erwarten: `eval` → `hook-registered` → `shutdown-hook-fired` → `spawn-exit` → `trigger-spawned` → `exporter-start` → `exporter-http`. Fehlt `shutdown-hook-fired`, hat der Quit-Pfad den Hook nicht erreicht. Fehlt schon `root-ok`, zuerst SYNC_ROOT setzen.
+**Nach dem nächsten sauberen Beenden** mindestens erwarten: `eval` → `hook-registered` → `shutdown-hook-fired` → `spawn-exit` → `trigger-spawned` → `exporter-start` → `exporter-http`. Bei Fehler: `exporter-fail.txt` öffnen (`reason=` / `rc=`) und `logs/export-*.log`. Fehlt `shutdown-hook-fired`, hat der Quit-Pfad den Hook nicht erreicht. Fehlt schon `root-ok`, zuerst SYNC_ROOT in der `.js` setzen.
 
 Optional in Jameica-Log (solange Logger noch offen): Zeilen mit `[openjverein-n8n-sync]`.
 

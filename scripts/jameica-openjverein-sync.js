@@ -19,26 +19,32 @@
  * (siehe README). Alte Hook-Versionen aus Scripting entfernen (Recovery).
  *
  * Installation:
- *   1. Repo klonen, .env füllen, SYNC_ROOT unten setzen (Jameica hat oft keine ENV).
+ *   1. Repo klonen, .env füllen, SYNC_ROOT unten in dieser Datei setzen.
  *   2. Jameica normal starten (kein Launcher/Wrapper).
  *   3. Datei → Einstellungen → Scripting → diese Datei hinzufügen → Speichern.
  *   4. Neu starten; sauber beenden (Datei → Beenden) → Exit-Export.
  *
  * Kill/Absturz: Hook bleibt aus → Drive behält letzten erfolgreichen Sync (OK).
- * Kein Cron. Keine personenbezogenen Pfade im Repo.
+ * Kein Cron. Keine personenbezogenen Pfade im Repo (Platzhalter lassen).
  */
 
 /* global Java, Packages, __FILE__, __DIR__ */
 
 // =============================================================================
-// CONFIG — Marlon: SYNC_ROOT hier setzen (Jameica bekommt meist keine ENV)
+// CONFIG — SYNC_ROOT hier setzen (empfohlen; zuverlässig unter Jameica)
 // =============================================================================
 /**
- * Absoluter Pfad zum geklonten Repo. Platzhalter ersetzen.
+ * Absoluter Pfad zum geklonten Repo. Platzhalter ersetzen — kein persönlicher
+ * Default im Git (z. B. nicht I:\… committen).
  * Windows: Backslashes verdoppeln, z. B. "C:\\Users\\…\\openjverein-n8n-sync"
  * Linux/macOS: "/home/…/openjverein-n8n-sync"
  *
- * Fallback-Reihenfolge: ENV OPENJVEREIN_N8N_SYNC_ROOT → dieser Wert →
+ * OPENJVEREIN_N8N_SYNC_ROOT (ENV) gilt NUR, wenn die Variable für den
+ * **Jameica-Prozess** gesetzt ist (Windows System-/Benutzer-Umgebung oder
+ * Verknüpfung „Umgebung“). Eine zufällige Shell-`.env` oder `set` in cmd.exe
+ * sieht Jameica **nicht**. Deshalb SYNC_ROOT hier in der .js setzen.
+ *
+ * Fallback-Reihenfolge: Jameica-ENV OPENJVEREIN_N8N_SYNC_ROOT → dieser Wert →
  * Parent von scripts/, falls Scripting den registrierten .js-Pfad liefert.
  * Platzhalter/leer → root-fail.txt (Hook registriert sich trotzdem).
  */
@@ -277,7 +283,8 @@ function _rootHint() {
   return (
     "SYNC_ROOT in scripts/jameica-openjverein-sync.js oben setzen " +
     '(z. B. SYNC_ROOT = "C:\\\\Pfad\\\\zu\\\\openjverein-n8n-sync") — ' +
-    "Jameica hat oft keine ENV; ohne Root kein export-trigger / kein Webhook."
+    "OPENJVEREIN_N8N_SYNC_ROOT nur als Windows System/User-ENV oder in der " +
+    "Jameica-Verknüpfung (nicht Shell-.env); ohne Root kein export-trigger / kein Webhook."
   );
 }
 

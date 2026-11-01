@@ -18,19 +18,9 @@ mkdir -p "${LOG_DIR}"
 
 die() { echo "Fehler: $*" >&2; exit 1; }
 
-[[ -n "${MODE}" ]] || die "Modus fehlt (start|exit)"
-[[ -f "${EXPORTER}" ]] || die "Exporter fehlt: ${EXPORTER}"
-
-if [[ -f "${ENV_FILE}" ]]; then
-  set -a
-  # shellcheck disable=SC1090
-  source "${ENV_FILE}"
-  set +a
-fi
-
 log() { echo "[export-trigger] $*"; }
 
-# Sichtbare Marker: TMPDIR/%TEMP% und Repo logs/ (kein PII)
+# Sichtbare Marker: TMPDIR/%TEMP% und Repo logs/ (kein PII in Git)
 diag_marker() {
   local name="$1"
   local text="$2"
@@ -44,18 +34,77 @@ diag_marker() {
   log "diag ${name}: ${text}"
 }
 
-diag_marker "ojv-n8n-sync-trigger-spawned.txt" "export-trigger mode=${MODE} waitPid=${WAIT_PID:--} root=${REPO_ROOT}"
+write_fail() {
+  local reason="$1"
+  local detail="$2"
+  local rc="${3:-unknown}"
+  diag_marker "ojv-n8n-sync-exporter-fail.txt" \
+    "reason=${reason} detail=${detail} rc=${rc} mode=${MODE} python=${PYTHON}"
+}
+
+resolve_python() {
+  if command -v "${PYTHON}" >/dev/null 2>&1; then
+    return 0
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    PYTHON=python3
+    return 0
+  fi
+  if command -v python >/dev/null 2>&1; then
+    PYTHON=python
+    return 0
+  fi
+  return 1
+}
+
+[[ -n "${MODE}" ]] || {
+  write_fail missing_mode "start_or_exit_required" 1
+  die "Modus fehlt (start|exit)"
+}
+[[ -f "${EXPORTER}" ]] || {
+  write_fail exporter_missing "${EXPORTER}" 1
+  die "Exporter fehlt: ${EXPORTER}"
+}
+
+if [[ ! -f "${ENV_FILE}" ]]; then
+  write_fail missing_env_file "copy_.env.example_to_.env_and_set_N8N_WEBHOOK_URL" 2
+  die ".env fehlt: ${ENV_FILE}"
+fi
+
+set -a
+# shellcheck disable=SC1090
+source "${ENV_FILE}"
+set +a
+
+diag_marker "ojv-n8n-sync-trigger-spawned.txt" \
+  "export-trigger mode=${MODE} waitPid=${WAIT_PID:--} root=${REPO_ROOT} envFile=${ENV_FILE} python=${PYTHON}"
+
+if ! resolve_python; then
+  write_fail python_not_found "python_not_on_PATH_when_spawned_from_Jameica_install_Python_or_set_PYTHON" 127
+  die "python nicht auf PATH (${PYTHON})"
+fi
 
 run_exporter() {
   local trigger="$1"
   shift
-  log "Exporter (${trigger})…"
-  "${PYTHON}" "${EXPORTER}" --env-file "${ENV_FILE}" --trigger "${trigger}" "$@" || {
-    local rc=$?
-    diag_marker "ojv-n8n-sync-exporter-fail.txt" "exporter exit=${rc} trigger=${trigger}"
-    log "Exporter Exit-Code ${rc} (Outbox greift beim nächsten Exit oder manuell)" >&2
+  local export_log="${LOG_DIR}/export-${trigger}.log"
+  log "Exporter (${trigger})… log=${export_log}"
+  set +e
+  "${PYTHON}" "${EXPORTER}" --env-file "${ENV_FILE}" --trigger "${trigger}" "$@" \
+    >"${export_log}" 2>&1
+  local rc=$?
+  set -e
+  if [[ "${rc}" -ne 0 ]]; then
+    # Keep Python's reason=* marker; only write fallback if missing/empty rc
+    local fail_tmp="${TMPDIR:-${TEMP:-${TMP:-/tmp}}}/ojv-n8n-sync-exporter-fail.txt"
+    if ! grep -q 'reason=' "${fail_tmp}" 2>/dev/null \
+      && ! grep -q 'reason=' "${LOG_DIR}/ojv-n8n-sync-exporter-fail.txt" 2>/dev/null; then
+      write_fail exporter_exit "see_logs_export-${trigger}.log" "${rc:-unknown}"
+    fi
+    log "Exporter Exit-Code ${rc:-unknown} (siehe ${export_log})" >&2
     return "${rc}"
-  }
+  fi
+  return 0
 }
 
 case "${MODE}" in
@@ -82,6 +131,7 @@ case "${MODE}" in
     run_exporter jameica_exit
     ;;
   *)
+    write_fail unknown_mode "${MODE}" 1
     die "Unbekannter Modus: ${MODE} (erwartet: start|exit)"
     ;;
 esac
