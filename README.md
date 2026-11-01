@@ -6,19 +6,19 @@ Synchronisiert die Zusatzfelder **`insta`**, **`website`**, **`flyer`** (Ja/Nein
 
 **Lizenz:** [PolyForm Noncommercial 1.0.0](LICENSE) — frei nutzbar, änderbar und weitergebbar **nichtkommerziell**; **kein Verkauf** der Software. Details und Mitwirken: [CONTRIBUTING.md](CONTRIBUTING.md).
 
-**Trigger:** Jameica über den **Launcher** starten; nach Prozessende läuft der Export automatisch. Kein Cron, kein manuelles Export-Klicken im Alltag, kein Jameica-Scripting-Hook.
+**Trigger:** Jameica **normal starten** (kein Launcher/Wrapper). Automation über **Jameica Scripting**. Kein Cron.
 
 ## Architektur (kurz)
 
-1. **Launcher** startet Jameica (UI unverändert).
-2. Nach **Beenden**: Launcher ruft `export-trigger exit` → H2 **readonly** → JSON/CSV → n8n.
-3. Filter: nur **aktive** Mitglieder (`austritt` leer) mit **mindestens einer** Einwilligung.
-4. n8n schreibt Drive `aktuell/` + datiertes `archiv/` (optional `meta/last-sync.json`).
+1. Jameica wie gewohnt starten; Sync-Script unter **Einstellungen → Scripting** registrieren.
+2. Beim Laden: Script meldet sich an (deferred); **kein** `MessageConsumer` (das hing früher beim Start).
+3. Beim sauberen Beenden: `Runtime.addShutdownHook` startet `export-trigger exit` **detached** → H2 readonly → JSON/CSV → n8n.
+4. Filter: nur **aktive** Mitglieder mit **mindestens einer** Einwilligung.
 
-Kill/Absturz/Stromausfall: kein Exit-Lauf → Drive behält den **letzten erfolgreichen Sync**. Das ist **OK**.
+Kill/Absturz: kein Exit-Lauf → Drive behält den **letzten erfolgreichen Sync**. Das ist **OK**.
 
 ```text
-Launcher → Jameica … Beenden → export-trigger exit → Exporter → n8n → Drive
+Jameica (Scripting) … Beenden → Runtime-Hook → export-trigger exit → Exporter → n8n → Drive
 ```
 
 ## Setup
@@ -30,64 +30,59 @@ python3 -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r exporter/requirements.txt
 cp .env.example .env
-# .env: JAMEICA_BIN, N8N_*, H2_DB_PATH, H2_JDBC_JAR
-chmod +x launcher/jameica-launcher.sh scripts/export-trigger.sh
+# .env: N8N_*, H2_DB_PATH, H2_JDBC_JAR
+chmod +x scripts/export-trigger.sh
 ```
 
 ### Wichtige `.env`-Platzhalter
 
 | Variable | Bedeutung |
 |----------|-----------|
-| `JAMEICA_BIN` | Pfad zu `jameica.exe` / `jameica.sh` |
 | `N8N_WEBHOOK_URL` | z. B. `https://<dein-n8n>/webhook/einwilligung-bildnutzung` |
 | `N8N_WEBHOOK_SECRET` | gemeinsames Secret; Header `X-Webhook-Secret` |
 | `H2_DB_PATH` | H2-Datei **ohne** `.mv.db`-Suffix |
 | `H2_JDBC_JAR` | Pfad zur `h2-*.jar` |
-| `FLUSH_OUTBOX_ON_START` | optional `1` = vor Start nur Outbox flushen (Default `0`) |
 | `EXIT_H2_SETTLE_SECONDS` | Pause nach Exit vor H2-Öffnen (Default `2`) |
+| `OPENJVEREIN_N8N_SYNC_ROOT` | optional statt `SYNC_ROOT` in der `.js` |
 
 Keine echten Secrets ins Git committen.
 
-## Launcher — einmal Shortcut, danach automatisch
+---
 
-Primärweg: **nicht** `jameica.exe` / `jameica.sh` direkt starten, sondern den Launcher. Nach **Datei → Beenden** folgt der Sync von allein.
+## Schritt 1 — Hello-World (Hang-Beweis, zuerst)
 
-### Windows (einmalig)
+Alte Hook-Versionen mit `MessageConsumer` / `Java.extend` **hängen den Start**. Zuerst beweisen, dass Scripting ohne Hang läuft:
 
-1. `.env` mit `JAMEICA_BIN=…\jameica.exe` (und H2/n8n) füllen.
-2. Desktop-Verknüpfung erzeugen:
+1. Falls Jameica noch hängt: **Recovery** (unten) — Sync-`.js` aus der Config entfernen.
+2. Jameica **normal** starten (nicht über `launcher/`).
+3. **Datei → Einstellungen → Scripting → Script hinzufügen…** → `scripts/hello-world.js` → Speichern.
+4. Jameica **neu starten**.
 
-```powershell
-.\launcher\create-desktop-shortcut.ps1
-```
+### Was du sehen solltest
 
-3. Die neue Verknüpfung (**„Jameica (OpenJVerein Sync)“**) ins Startmenü / Taskleiste **pinnen**.
-4. Ab jetzt nur noch diese Verknüpfung nutzen — nicht die nackte `jameica.exe`.
+| Check | Erwartung |
+|-------|-----------|
+| UI | Jameica kommt hoch, kein Freeze |
+| Log | Zeile `[ojv-hello] loaded …` |
+| Marker Load | `%TEMP%\ojv-hello-world-loaded.txt` bzw. `$TMPDIR/ojv-hello-world-loaded.txt` |
+| Nach **Datei → Beenden** | Marker `…/ojv-hello-world-shutdown.txt` + Log `shutdown hook fired` |
 
-Manuell: Verknüpfung auf `launcher\jameica-launcher.cmd`, Arbeitsverzeichnis = Repo-Root.
+Wenn der Start mit Hello-World hängt: in der Datei `STAGE_SHUTDOWN_HOOK = false` setzen und erneut testen. Wenn dann OK → Hook-Registrierung problematisch; Issue öffnen. Wenn schon ohne Hook hängt → `STAGE_LOGGER` / `STAGE_MARKER_FILE` abschalten bzw. `minimal.js` testen.
 
-### Linux
+---
 
-```bash
-./launcher/jameica-launcher.sh
-# optional Argumente an Jameica:
-./launcher/jameica-launcher.sh --irgendwas
-```
+## Schritt 2 — Sync-Script registrieren
 
-Einmalig: Desktop-Entry / Menüeintrag / Alias auf dieses Skript legen und statt Roh-`jameica.sh` nutzen.
+Nur wenn Hello-World **Start + Shutdown-Marker** ok waren:
 
-Details: [`launcher/README.md`](launcher/README.md).
+1. Hello-World aus Scripting entfernen (oder deaktiviert lassen).
+2. In `scripts/jameica-openjverein-sync.js` `SYNC_ROOT` auf den **absoluten Repo-Pfad** setzen **oder** `OPENJVEREIN_N8N_SYNC_ROOT` in der Umgebung setzen.
+3. Scripting → `scripts/jameica-openjverein-sync.js` hinzufügen → Speichern → Jameica neu starten.
+4. Sauber beenden → `output/einwilligungen.*` und n8n-Webhook prüfen.
 
-### Ablauf
+Log-Erwartung: `[openjverein-n8n-sync] script loaded` und später `Runtime.addShutdownHook registered`, beim Beenden `detached: mode=exit`.
 
-| Zeitpunkt | Aktion |
-|-----------|--------|
-| Start über Launcher | Jameica wie gewohnt |
-| Nach Exit | `export-trigger exit` → Full-Export + Outbox-Retry → n8n |
-
-### Fallback (manuell)
-
-Nur wenn der Launcher nicht genutzt wurde:
+### Manueller Fallback / Test
 
 ```bash
 ./scripts/export-trigger.sh exit
@@ -95,22 +90,27 @@ Nur wenn der Launcher nicht genutzt wurde:
 python exporter/export.py --trigger jameica_exit
 ```
 
-Ordner-Watcher: bewusst **nicht** im MVP.
+---
 
-## Jameica-Scripting: nicht für Sync
+## Hang-Ursache (kurz)
 
-Scripting mit Java-Interop hängt beim Load (`ScriptingService.eval`) — bestätigt: leere `.js` startet, Hook-Code nicht. Deshalb:
+`ScriptingService` evaluiert registrierte `.js` **synchron** nach `SYSTEM_STARTED`.  
+Community-Scripts (Hibiscus) nutzen `Packages` + `events.add` ohne Problem.  
+Unser früherer Hook registrierte einen **`MessageConsumer` via `Java.extend` / `JavaAdapter`** im Eval-Pfad → Start freeze. Leere `.js` startete; Hook-Code nicht.
 
-- Sync **nur** über Launcher / `export-trigger`, **nicht** über registrierte Scripts.
-- `scripts/jameica-openjverein-sync.js` ist Kommentar-only und **soll nicht** unter Einstellungen → Scripting stehen.
-- `minimal.js` nur zur Hang-Diagnose nach Recovery.
+**Arbeitendes Muster:** Eval nur leicht (`events.add` + deferred Daemon-Thread); Shutdown über **`Runtime.addShutdownHook`**; Export nur **`ProcessBuilder.start()` ohne waitFor**.  
+`SYSTEM_SHUTDOWN` wird von Jameica **nicht** auf `events.*` gemappt — deshalb Hook statt Event-API.
 
-### Falls Jameica noch wegen alter Sync-`.js` hängt
+Optional später: winziges Java-Plugin, das bei `SYSTEM_SHUTDOWN` `QueryMessage("function.…")` an Queue `jameica.scripting` schickt (InvokeScriptMessageConsumer) — JS bleibt ohne Consumer.
+
+### Recovery (alte hängende Registrierung)
 
 1. Jameica / hängende Kinder beenden.
 2. Workdir: Windows `%USERPROFILE%\.jameica\`, Linux `~/.jameica/`, macOS oft `~/Library/jameica/`.
-3. In `cfg/de.willuhn.jameica.services.ScriptingService.properties` Zeilen `scripts.N=…jameica-openjverein-sync…` entfernen **oder** die `.js` umbenennen (`.bak`).
-4. Jameica neu starten; Sync weiter nur über Launcher.
+3. In `cfg/de.willuhn.jameica.services.ScriptingService.properties` Zeilen `scripts.N=…` mit altem Sync-/Hook-Pfad entfernen **oder** die `.js` umbenennen (`.bak`).
+4. Neu starten → zuerst `hello-world.js`.
+
+---
 
 ## n8n-Workflow importieren
 
@@ -118,40 +118,26 @@ Scripting mit Java-Interop hängt beim Load (`ScriptingService.eval`) — bestä
 2. Google-Drive-OAuth-Credential **in der n8n-UI** anlegen und an die Drive-Nodes hängen (Dummy-IDs im JSON ersetzen).
 3. Ordner-IDs setzen für:
    - `aktuell/` → `DRIVE_FOLDER_ID_AKTUELL_PLACEHOLDER`
-   - `archiv/YYYY-MM-DD/` → `DRIVE_FOLDER_ID_ARCHIV_PLACEHOLDER` (datierter Unterordner)
-   - `meta/` → `DRIVE_FOLDER_ID_META_PLACEHOLDER`
-4. Webhook-Pfad: `einwilligung-bildnutzung` (POST).
-5. Secret: Header `X-Webhook-Secret` muss zu `N8N_WEBHOOK_SECRET` passen (in n8n-Env oder IF-Node).
-6. Workflow aktivieren; Production-Webhook-URL in lokale `.env` übernehmen.
+   - `archiv/` → `DRIVE_FOLDER_ID_ARCHIV_PLACEHOLDER`
+4. Webhook-URL/Secret an lokale `.env` anbinden.
 
-### Drive-Layout (Pfadname noch offen)
+## Drive-Layout
 
 ```text
-…/<DRIVE-ORDNER-NOCH-OFFEN>/
-  aktuell/
-    einwilligungen.json
-    einwilligungen.csv
-  archiv/
-    YYYY-MM-DD/
-      …
-  meta/
-    last-sync.json
+…/<DRIVE-ORDNER>/
+  aktuell/einwilligungen.{json,csv}
+  archiv/YYYY-MM-DD/…
+  meta/last-sync.json   # optional
 ```
 
-Arbeitsdatei für Medien: **`aktuell/einwilligungen.csv`**.
+## Was nicht (MVP)
 
-## Secrets
+| Thema | Status |
+|-------|--------|
+| Cron / Task Scheduler | **nein** |
+| Launcher/Wrapper als Primärstart | **cancelled** — Jameica normal starten |
+| Ordner-Watcher | nein |
+| `MessageConsumer` in JS | **nicht** — hängt beim Eval |
+| Kommentar-only `.js` als Endzustand | **nein** — Hello-World + Sync-Hook |
 
-| Secret | Wo |
-|--------|-----|
-| Webhook-URL / Secret | lokal `.env` + n8n — in Git nur Platzhalter |
-| Google Drive OAuth | **nur** in n8n |
-| H2-Zugang | lokal am Exporter |
-
-Dieses Repo ist **publishbar**: keine echten Hosts, Tokens oder DB-Pfade.
-
-## Hinweise
-
-- Primärpfad: **Launcher** → Exit → Export. Kein Cron, kein Scripting-Hook.
-- Filter „≥1 Einwilligung“ im Exporter; n8n als Sicherheitsnetz.
-- Voraussetzungen: Jameica/OpenJVerein, Python 3.10+, Java (JayDeBeApi/H2-JAR), erreichbares n8n.
+`launcher/` bleibt nur als Notfall-Experiment im Tree; **nicht** der unterstützte Pfad.

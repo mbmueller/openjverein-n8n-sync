@@ -1,36 +1,5 @@
-# Launcher (Primärpfad)
+# Launcher — cancelled / Notfall
 
-Dünner Starter: **Jameica starten → auf Prozessende warten → `export-trigger exit`**.  
-Jameica-UI unverändert; nur der Startweg wechselt. Kein Cron. Kein Scripting-Hook.
+**Nicht der unterstützte Primärpfad.** Der User-Pfad ist: Jameica normal starten + **Jameica Scripting** (`scripts/hello-world.js`, dann `jameica-openjverein-sync.js`). Siehe Haupt-README.
 
-## Einmal einrichten
-
-1. Repo klonen, `.env` aus `.env.example` — mindestens `JAMEICA_BIN`, `H2_*`, `N8N_*`.
-2. **Windows:** Desktop-Verknüpfung erzeugen und **diese** pinnen / nutzen:
-
-   ```powershell
-   .\launcher\create-desktop-shortcut.ps1
-   ```
-
-   Oder manuell Verknüpfung auf `launcher\jameica-launcher.cmd` (Arbeitsverzeichnis = Repo-Root).
-
-3. **Linux:** Alias, Desktop-Entry oder Startmenü-Eintrag auf:
-
-   ```bash
-   /path/to/openjverein-n8n-sync/launcher/jameica-launcher.sh
-   ```
-
-4. Ab jetzt **nicht** mehr `jameica.exe` / `jameica.sh` direkt starten — sonst kein Auto-Export.
-
-## Ablauf
-
-| Zeitpunkt | Aktion |
-|-----------|--------|
-| Start | Jameica wie gewohnt (optional Outbox-Flush wenn `FLUSH_OUTBOX_ON_START=1`) |
-| Nach **Datei → Beenden** | Launcher ruft `scripts/export-trigger … exit` → H2-Export → n8n |
-
-## Fallback
-
-Wenn der Launcher nicht passt: nach manuellem Jameica-Ende `scripts/export-trigger.cmd exit` (bzw. `.sh`).  
-Ordner-Watcher: bewusst nicht im MVP.  
-Jameica-Scripting: **nicht** für Sync — siehe Haupt-README.
+Diese Dateien bleiben nur als experimenteller Fallback (Prozess-Wrapper nach Exit), falls Scripting in einer Installation unbrauchbar bleibt. Kein Cron. Keine Empfehlung für den Alltag.

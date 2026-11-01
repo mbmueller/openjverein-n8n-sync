@@ -1,13 +1,12 @@
 /**
- * Nur Diagnose (nicht Sync): hängt Jameica schon bei einem nahezu leeren Custom-Script?
- *
- * Sync läuft über launcher/ — Scripting nicht nutzen.
+ * Nur Diagnose (Stufe unter hello-world.js): hängt Jameica schon bei
+ * einem nahezu leeren Custom-Script ohne Packages?
  *
  * Test nach Recovery (README):
- *   1. Alte Sync-.js aus ScriptingService.properties entfernen / umbenennen.
- *   2. Optional nur diese Datei registrieren.
- *   3. Start OK → Eval an sich ok; Hang kam vom früheren Java-Interop.
- *   4. Script wieder entfernen; weiter mit launcher/.
+ *   1. Alte Sync-/Hello-.js aus ScriptingService.properties entfernen.
+ *   2. Nur diese Datei registrieren → Start OK?
+ *   3. Dann scripts/hello-world.js (Packages + Shutdown-Hook).
+ *   4. Dann jameica-openjverein-sync.js (Exit-Export).
  *
  * Absichtlich: kein Packages, kein Java.type, kein events.add, kein I/O.
  */

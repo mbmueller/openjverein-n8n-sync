@@ -1,5 +1,6 @@
 @echo off
-REM Called by launcher\ after Jameica exits (or manually). No Task Scheduler. No Scripting.
+REM Called by Jameica Scripting shutdown hook (detached) or manually.
+REM launcher\ is cancelled — not primary. No Task Scheduler.
 REM Usage:
 REM   export-trigger.cmd start
 REM   export-trigger.cmd exit [JAMEICA_PID]

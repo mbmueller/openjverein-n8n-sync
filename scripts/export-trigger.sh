@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Called by launcher/ after Jameica exits (or manually). No Cron. No Scripting.
+# Called by Jameica Scripting shutdown hook (detached) or manually.
+# Launcher/ is cancelled — not the primary path. No Cron.
 # Usage:
 #   export-trigger.sh start              # Outbox flush only
 #   export-trigger.sh exit [JAMEICA_PID] # optional wait for PID, then Full-Export
