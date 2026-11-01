@@ -13,6 +13,8 @@ PYTHON="${PYTHON:-python3}"
 EXPORTER="${REPO_ROOT}/exporter/export.py"
 MODE="${1:-}"
 WAIT_PID="${2:-}"
+LOG_DIR="${REPO_ROOT}/logs"
+mkdir -p "${LOG_DIR}"
 
 die() { echo "Fehler: $*" >&2; exit 1; }
 
@@ -28,12 +30,31 @@ fi
 
 log() { echo "[export-trigger] $*"; }
 
+# Sichtbare Marker: TMPDIR/%TEMP% und Repo logs/ (kein PII)
+diag_marker() {
+  local name="$1"
+  local text="$2"
+  local stamp
+  stamp="$(date -Iseconds 2>/dev/null || date)"
+  local body="${text}"$'\n'"${stamp}"$'\n'
+  local tmp="${TMPDIR:-${TEMP:-${TMP:-/tmp}}}"
+  mkdir -p "${tmp}" "${LOG_DIR}" 2>/dev/null || true
+  printf '%s' "${body}" > "${tmp}/${name}" 2>/dev/null || true
+  printf '%s' "${body}" > "${LOG_DIR}/${name}" 2>/dev/null || true
+  log "diag ${name}: ${text}"
+}
+
+diag_marker "ojv-n8n-sync-trigger-spawned.txt" "export-trigger mode=${MODE} waitPid=${WAIT_PID:--} root=${REPO_ROOT}"
+
 run_exporter() {
   local trigger="$1"
   shift
   log "Exporter (${trigger})…"
   "${PYTHON}" "${EXPORTER}" --env-file "${ENV_FILE}" --trigger "${trigger}" "$@" || {
-    log "Exporter Exit-Code $? (Outbox greift beim nächsten Exit oder manuell)" >&2
+    local rc=$?
+    diag_marker "ojv-n8n-sync-exporter-fail.txt" "exporter exit=${rc} trigger=${trigger}"
+    log "Exporter Exit-Code ${rc} (Outbox greift beim nächsten Exit oder manuell)" >&2
+    return "${rc}"
   }
 }
 

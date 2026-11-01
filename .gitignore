@@ -9,6 +9,8 @@ output/*
 !output/.gitkeep
 outbox/*
 !outbox/.gitkeep
+logs/*
+!logs/.gitkeep
 *.log
 .DS_Store
 Thumbs.db

@@ -12,13 +12,15 @@ Synchronisiert die Zusatzfelder **`insta`**, **`website`**, **`flyer`** (Ja/Nein
 
 1. Jameica wie gewohnt starten; Sync-Script unter **Einstellungen → Scripting** registrieren.
 2. Beim Laden: Script meldet sich an (deferred); **kein** `MessageConsumer` (das hing früher beim Start).
-3. Beim sauberen Beenden: `Runtime.addShutdownHook` startet `export-trigger exit` **detached** → H2 readonly → JSON/CSV → n8n.
+3. Beim sauberen Beenden (**Datei → Beenden**): `Application.shutDown()` → `System.exit` → `Runtime.addShutdownHook` startet `export-trigger exit` **detached** → H2 readonly → JSON/CSV → n8n.
 4. Filter: nur **aktive** Mitglieder mit **mindestens einer** Einwilligung.
+
+**Kein Webhook beim Start** (Standard): `ENABLE_START_OUTBOX_FLUSH = false` — Full-Export nur beim Beenden. Start-Outbox ist optional.
 
 Kill/Absturz: kein Exit-Lauf → Drive behält den **letzten erfolgreichen Sync**. Das ist **OK**.
 
 ```text
-Jameica (Scripting) … Beenden → Runtime-Hook → export-trigger exit → Exporter → n8n → Drive
+Jameica (Scripting) … Datei→Beenden → Runtime-Hook → export-trigger exit → Exporter → n8n → Drive
 ```
 
 ## Setup
@@ -76,11 +78,12 @@ Wenn der Start mit Hello-World hängt: in der Datei `STAGE_SHUTDOWN_HOOK = false
 Nur wenn Hello-World **Start + Shutdown-Marker** ok waren:
 
 1. Hello-World aus Scripting entfernen (oder deaktiviert lassen).
-2. In `scripts/jameica-openjverein-sync.js` `SYNC_ROOT` auf den **absoluten Repo-Pfad** setzen **oder** `OPENJVEREIN_N8N_SYNC_ROOT` in der Umgebung setzen.
+2. **SYNC_ROOT-Checkliste** (ohne das kein Export):
+   - In `scripts/jameica-openjverein-sync.js` `SYNC_ROOT = "…"` auf den **absoluten Repo-Pfad** setzen **oder**
+   - `OPENJVEREIN_N8N_SYNC_ROOT` in der Umgebung von Jameica setzen (nicht nur in einer fremden Shell).
+   - Pfad muss existieren und `scripts/export-trigger.(sh|cmd)` sowie `.env` enthalten.
 3. Scripting → `scripts/jameica-openjverein-sync.js` hinzufügen → Speichern → Jameica neu starten.
-4. Sauber beenden → `output/einwilligungen.*` und n8n-Webhook prüfen.
-
-Log-Erwartung: `[openjverein-n8n-sync] script loaded` und später `Runtime.addShutdownHook registered`, beim Beenden `detached: mode=exit`.
+4. Sauber beenden (**Datei → Beenden**, kein Kill) → Marker + `output/einwilligungen.*` + n8n prüfen.
 
 ### Manueller Fallback / Test
 
@@ -89,6 +92,45 @@ Log-Erwartung: `[openjverein-n8n-sync] script loaded` und später `Runtime.addSh
 # Windows: scripts\export-trigger.cmd exit
 python exporter/export.py --trigger jameica_exit
 ```
+
+---
+
+## Diagnose: Warum kein Webhook? Wohin schauen?
+
+Typische Ursachen (oft kombiniert):
+
+| Ursache | Wirkung |
+|---------|---------|
+| `SYNC_ROOT` / `OPENJVEREIN_N8N_SYNC_ROOT` leer oder falsch | Hook wird trotzdem registriert, aber Spawn schreibt `…-root-fail.txt` / `…-spawn-fail.txt` — **kein** Exporter |
+| `ENABLE_START_OUTBOX_FLUSH = false` (Default) | **Kein** Start-Webhook — Absicht; Export nur nach Beenden |
+| Nur Fenster schließen / Kill statt **Datei → Beenden** | JVM-Hook kann ausbleiben |
+| `.env` Platzhalter / H2-Pfad falsch | Trigger läuft, Webhook/H2 scheitert → Marker `…-exporter-http.txt` / `…-exporter-fail.txt`, ggf. Outbox |
+| Alter Hang-Hook noch registriert | Start freeze — Recovery unten |
+
+`SYSTEM_SHUTDOWN` geht **nicht** an `events.*`. MessageConsumer/`Java.extend` hängt beim Eval — deshalb **Runtime-Shutdown-Hook**. Bei **Datei → Beenden** ruft Jameica `System.exit` auf → Hooks laufen. Der Jameica-Logger ist zu dem Zeitpunkt oft schon geschlossen; deshalb zählen die **Marker-Dateien**.
+
+### Marker-Ort (nach Start und nach Beenden prüfen)
+
+Windows: `%TEMP%\ojv-n8n-sync-*.txt`  
+Linux/macOS: `$TMPDIR/ojv-n8n-sync-*.txt` (sonst `/tmp/…`)  
+Zusätzlich, wenn `SYNC_ROOT` ok: `<Repo>/logs/ojv-n8n-sync-*.txt` und `logs/export-trigger-spawn.log`
+
+| Datei | Bedeutung |
+|-------|-----------|
+| `ojv-n8n-sync-eval.txt` | Script wurde evaluiert (Load ok) |
+| `ojv-n8n-sync-root-ok.txt` / `root-fail.txt` | Repo-Pfad gesetzt bzw. fehlt |
+| `ojv-n8n-sync-hook-registered.txt` | Shutdown-Hook hängt an der JVM |
+| `ojv-n8n-sync-start-skipped.txt` | Start-Outbox absichtlich aus |
+| `ojv-n8n-sync-shutdown-hook-fired.txt` | **Datei → Beenden** hat den Hook ausgelöst |
+| `ojv-n8n-sync-spawn-exit.txt` | `export-trigger exit` detached gestartet |
+| `ojv-n8n-sync-trigger-spawned.txt` | Trigger-Prozess läuft |
+| `ojv-n8n-sync-exporter-start.txt` | Python-Exporter gestartet |
+| `ojv-n8n-sync-exporter-http.txt` | Webhook OK oder FAIL (ohne personenbezogene Daten) |
+| `ojv-n8n-sync-spawn-fail.txt` / `exporter-fail.txt` | Pfad/Spawn/H2-Fehler |
+
+**Nach dem nächsten sauberen Beenden** mindestens erwarten: `eval` → `hook-registered` → `shutdown-hook-fired` → `spawn-exit` → `trigger-spawned` → `exporter-start` → `exporter-http`. Fehlt `shutdown-hook-fired`, hat der Quit-Pfad den Hook nicht erreicht. Fehlt schon `root-ok`, zuerst SYNC_ROOT setzen.
+
+Optional in Jameica-Log (solange Logger noch offen): Zeilen mit `[openjverein-n8n-sync]`.
 
 ---
 

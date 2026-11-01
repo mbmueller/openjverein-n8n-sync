@@ -12,6 +12,8 @@ if not defined PYTHON set "PYTHON=python"
 set "EXPORTER=%REPO_ROOT%\exporter\export.py"
 set "MODE=%~1"
 set "WAIT_PID=%~2"
+set "LOG_DIR=%REPO_ROOT%\logs"
+if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
 
 if "%MODE%"=="" (
   echo Fehler: Modus fehlt ^(start^|exit^) 1>&2
@@ -28,10 +30,24 @@ if exist "%ENV_FILE%" (
   )
 )
 
+REM Marker unter %%TEMP%% und logs\ (kein PII)
+set "DIAG_TMP=%TEMP%"
+if not defined DIAG_TMP set "DIAG_TMP=%TMP%"
+if not defined DIAG_TMP set "DIAG_TMP=%LOG_DIR%"
+echo export-trigger mode=%MODE% waitPid=%WAIT_PID% root=%REPO_ROOT%> "%DIAG_TMP%\ojv-n8n-sync-trigger-spawned.txt"
+echo %DATE% %TIME%>> "%DIAG_TMP%\ojv-n8n-sync-trigger-spawned.txt"
+copy /Y "%DIAG_TMP%\ojv-n8n-sync-trigger-spawned.txt" "%LOG_DIR%\ojv-n8n-sync-trigger-spawned.txt" >NUL 2>&1
+echo [export-trigger] diag ojv-n8n-sync-trigger-spawned.txt mode=%MODE%
+
 if /I "%MODE%"=="start" (
   if not defined N8N_HTTP_TIMEOUT_SECONDS set "N8N_HTTP_TIMEOUT_SECONDS=8"
   echo [export-trigger] Exporter ^(outbox_flush^)…
   "%PYTHON%" "%EXPORTER%" --env-file "%ENV_FILE%" --trigger outbox_flush --flush-only
+  if errorlevel 1 (
+    echo exporter fail trigger=outbox_flush> "%DIAG_TMP%\ojv-n8n-sync-exporter-fail.txt"
+    echo %DATE% %TIME%>> "%DIAG_TMP%\ojv-n8n-sync-exporter-fail.txt"
+    copy /Y "%DIAG_TMP%\ojv-n8n-sync-exporter-fail.txt" "%LOG_DIR%\ojv-n8n-sync-exporter-fail.txt" >NUL 2>&1
+  )
   exit /b 0
 )
 
@@ -57,7 +73,13 @@ if /I "%MODE%"=="exit" (
   )
   echo [export-trigger] Exporter ^(jameica_exit^)…
   "%PYTHON%" "%EXPORTER%" --env-file "%ENV_FILE%" --trigger jameica_exit
-  exit /b %ERRORLEVEL%
+  set "RC=%ERRORLEVEL%"
+  if not "%RC%"=="0" (
+    echo exporter fail trigger=jameica_exit rc=%RC%> "%DIAG_TMP%\ojv-n8n-sync-exporter-fail.txt"
+    echo %DATE% %TIME%>> "%DIAG_TMP%\ojv-n8n-sync-exporter-fail.txt"
+    copy /Y "%DIAG_TMP%\ojv-n8n-sync-exporter-fail.txt" "%LOG_DIR%\ojv-n8n-sync-exporter-fail.txt" >NUL 2>&1
+  )
+  exit /b %RC%
 )
 
 echo Fehler: Unbekannter Modus: %MODE% ^(erwartet: start^|exit^) 1>&2

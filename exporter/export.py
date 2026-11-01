@@ -2,9 +2,9 @@
 """
 OpenJVerein Bildnutzungs-Einwilligungen → JSON/CSV → n8n Webhook.
 
-Primärpfad: launcher/ startet Jameica und ruft nach Exit export-trigger → diesen
-Exporter auf; H2 readonly (kein AUTO_SERVER). Bei POST-Fehler: Outbox;
-Retry beim nächsten Launcher-Exit oder manuell (export-trigger start).
+Primärpfad: Jameica Scripting → Runtime-Shutdown-Hook → export-trigger exit →
+dieser Exporter; H2 readonly (kein AUTO_SERVER). Bei POST-Fehler: Outbox;
+Retry beim nächsten Exit oder manuell (export-trigger start). Launcher cancelled.
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ import csv
 import json
 import os
 import sys
+import tempfile
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
@@ -47,10 +48,33 @@ HAVING COALESCE(MAX(CASE WHEN fd.name = 'insta'   THEN z.feldjanein END), FALSE)
 """
 
 FIELDS = ["insta", "website", "flyer"]
+DIAG_PREFIX = "ojv-n8n-sync-"
 
 
 def repo_root() -> Path:
     return Path(__file__).resolve().parent.parent
+
+
+def write_diag(basename: str, text: str) -> None:
+    """Timestamped markers under TMPDIR/%TEMP% and <repo>/logs/ — no PII."""
+    stamp = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+    body = f"{text}\n{stamp}\n"
+    targets: list[Path] = []
+    try:
+        targets.append(Path(tempfile.gettempdir()) / basename)
+    except OSError:
+        pass
+    try:
+        log_dir = repo_root() / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        targets.append(log_dir / basename)
+    except OSError:
+        pass
+    for path in targets:
+        try:
+            path.write_text(body, encoding="utf-8")
+        except OSError:
+            pass
 
 
 def env(name: str, default: str | None = None) -> str | None:
@@ -258,6 +282,10 @@ def run(
     skip_flush: bool = False,
     env_file: Path | None = None,
 ) -> int:
+    write_diag(
+        f"{DIAG_PREFIX}exporter-start.txt",
+        f"exporter start trigger={trigger} flush_only={flush_only}",
+    )
     cfg = load_config(env_file)
     cfg["output_dir"].mkdir(parents=True, exist_ok=True)
     cfg["outbox_dir"].mkdir(parents=True, exist_ok=True)
@@ -268,13 +296,22 @@ def run(
             print(f"Outbox: {left} Datei(en) warten auf nächsten Exit oder manuellen Flush.")
 
     if flush_only:
+        write_diag(
+            f"{DIAG_PREFIX}exporter-http.txt",
+            f"flush_only done trigger={trigger}",
+        )
         return 0
 
     try:
         payload = export_from_h2(cfg, trigger)
-    except SystemExit:
+    except SystemExit as e:
+        write_diag(
+            f"{DIAG_PREFIX}exporter-fail.txt",
+            f"H2/config SystemExit code={getattr(e, 'code', e)}",
+        )
         raise
     except Exception as e:  # noqa: BLE001
+        write_diag(f"{DIAG_PREFIX}exporter-fail.txt", f"H2-Export fehlgeschlagen: {type(e).__name__}")
         print(f"H2-Export fehlgeschlagen: {e}", file=sys.stderr)
         traceback.print_exc()
         return 2
@@ -283,14 +320,25 @@ def run(
     csv_path = cfg["output_dir"] / "einwilligungen.csv"
     write_json(json_path, payload)
     write_csv(csv_path, payload["members"])
-    print(f"Export: {len(payload['members'])} Mitglieder → {json_path} , {csv_path}")
+    member_count = len(payload["members"])
+    print(f"Export: {member_count} Mitglieder → {json_path} , {csv_path}")
 
     try:
         post_webhook(cfg, payload)
+        write_diag(
+            f"{DIAG_PREFIX}exporter-http.txt",
+            f"webhook OK trigger={trigger} members={member_count}",
+        )
         print("Webhook OK")
         return 0
     except (HTTPError, URLError, RuntimeError, TimeoutError, OSError) as e:
         path = save_outbox(cfg["outbox_dir"], payload, str(e))
+        err_kind = type(e).__name__
+        http_code = getattr(e, "code", None)
+        write_diag(
+            f"{DIAG_PREFIX}exporter-http.txt",
+            f"webhook FAIL trigger={trigger} err={err_kind} http={http_code} outbox=1",
+        )
         print(f"Webhook fehlgeschlagen ({e}) → Outbox {path}", file=sys.stderr)
         return 1
 
