@@ -60,6 +60,10 @@ Optional Override: absoluter `PYTHON=C:\Pfad\zu\python.exe` in der Umgebung oder
 | `H2_JDBC_JAR` | Pfad zur `h2-*.jar` (siehe unten; Auto-Discovery falls Datei fehlt) |
 | `JAMEICA_HOME` | optional: Jameica-Installationsordner — verbessert JAR-Suche |
 | `EXIT_H2_SETTLE_SECONDS` | Pause nach Exit vor H2-Öffnen (Default `2`) |
+| `H2_CONNECT_TIMEOUT_SECONDS` | Max. Sekunden für JDBC-Connect (Default `30`; setzt auch H2 `LOCK_TIMEOUT`) |
+| `H2_QUERY_TIMEOUT_SECONDS` | Max. Sekunden für Export-SQL (Default `60`) |
+| `N8N_HTTP_TIMEOUT_SECONDS` | Webhook-HTTP-Timeout (Default `60`; Start-Flush setzt `8`) |
+| `EXPORTER_WATCHDOG_SECONDS` | Gesamtlauf-Deckel; danach `reason=watchdog` + Hard-Exit (Default `180`) |
 | `OPENJVEREIN_N8N_SYNC_ROOT` | optional statt `SYNC_ROOT` in der `.js` |
 
 Keine echten Secrets und **keine persönlichen Absolutpfade** ins Git committen (nur lokale `.env`).
@@ -153,7 +157,10 @@ Typische Ursachen (oft kombiniert):
 | `H2_JDBC_JAR` fehlt / falscher Pfad | `exporter-fail` `reason=h2_jar_missing` — unter Jameica `lib\h2\` bzw. `.jameica\plugins` nach `h2-*.jar` suchen (Abschnitt oben); `JAMEICA_HOME` setzen |
 | `H2_DB_PATH` falsch | `exporter-fail` `reason=h2_path` — typisch `%USERPROFILE%\.jameica\openjverein\h2db\openjverein` ohne `.mv.db` |
 | H2 noch gelockt (Jameica nicht weg) | `exporter-fail` `reason=jdbc_lock` — Settle erhöhen / sauber beenden |
-| Webhook-HTTP-Fehler | `exporter-http` FAIL + `exporter-fail` `reason=webhook_http` + Outbox |
+| H2-Connect hängt / Timeout | `exporter-progress` bleibt bei `h2_connect` → danach `reason=h2_connect_timeout` (oder `watchdog`) |
+| Keine JRE für jaydebeapi/JPype | `exporter-fail` `reason=jvm_missing` — JRE + `JAVA_HOME` für denselben User wie der detached Trigger |
+| Webhook-HTTP-Fehler / Timeout | `exporter-http` (+ Host) + `exporter-fail` `reason=webhook_http` / `webhook_timeout` + Outbox |
+| Exporter startet, kein fail/http | `exporter-progress.txt` (`stage=…`) + `logs/export-jameica_exit.log` hochladen |
 | Alter Hang-Hook noch registriert | Start freeze — Recovery unten |
 | Truthiness/`var e = events` auf globalem `events` | `eval-fail.txt`: `Invalid JavaScript value of type …ScriptingService$Events` — Sync-Script nutzt `events` **nicht** |
 
@@ -176,11 +183,14 @@ Zusätzlich, wenn `SYNC_ROOT` ok: `<Repo>/logs/ojv-n8n-sync-*.txt` und `logs/exp
 | `ojv-n8n-sync-spawn-exit.txt` | `export-trigger exit` detached gestartet |
 | `ojv-n8n-sync-trigger-spawned.txt` | Trigger-Prozess läuft |
 | `ojv-n8n-sync-exporter-start.txt` | Python-Exporter gestartet |
-| `ojv-n8n-sync-exporter-http.txt` | Webhook OK oder FAIL (ohne personenbezogene Daten) |
+| `ojv-n8n-sync-exporter-progress.txt` | Letzte Stufe (`stage=load_config` / `h2_connect` / `http_post` / …) — Hang-Ort |
+| `ojv-n8n-sync-exporter-http.txt` | Webhook POST start/OK/FAIL inkl. **Host** (keine Secrets) |
+| `ojv-n8n-sync-exporter-success.txt` | Export + Webhook OK |
 | `ojv-n8n-sync-spawn-fail.txt` / `exporter-fail.txt` | Pfad/Spawn/H2/Webhook — immer `reason=… rc=<Zahl>` (nie leeres `rc=`) |
-| `logs/export-jameica_exit.log` | stdout/stderr + Traceback des letzten Exit-Exports |
+| `logs/export-jameica_exit.log` | Unbuffered stdout/stderr + Traceback des letzten Exit-Exports |
+| `logs/export-trigger-spawn.log` | Spawn-Diagnose aus dem Jameica-Hook (falls geschrieben) |
 
-**Nach dem nächsten sauberen Beenden** mindestens erwarten: `eval` → `hook-registered` → `shutdown-hook-fired` → `spawn-exit` → `trigger-spawned` → `exporter-start` → `exporter-http`. Bei Fehler: `exporter-fail.txt` öffnen (`reason=` / `rc=`) und `logs/export-*.log`. Fehlt `shutdown-hook-fired`, hat der Quit-Pfad den Hook nicht erreicht. Fehlt schon `root-ok`, zuerst SYNC_ROOT in der `.js` setzen.
+**Nach dem nächsten sauberen Beenden** mindestens erwarten: `eval` → `hook-registered` → `shutdown-hook-fired` → `spawn-exit` → `trigger-spawned` → `exporter-start` → `exporter-progress` (`stage=…`) → `exporter-http` / `exporter-success` (oder `exporter-fail`). Bei Hang nach `exporter-start`: `exporter-progress.txt` + **Inhalt** von `logs/export-jameica_exit.log` und `logs/export-trigger-spawn.log` aus `SYNC_ROOT` in den Chat hochladen (Pfad allein reicht nicht). Fehlt `shutdown-hook-fired`, hat der Quit-Pfad den Hook nicht erreicht. Fehlt schon `root-ok`, zuerst SYNC_ROOT in der `.js` setzen.
 
 Optional in Jameica-Log (solange Logger noch offen): Zeilen mit `[openjverein-n8n-sync]`.
 

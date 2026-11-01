@@ -107,12 +107,18 @@ if errorlevel 1 (
 
 call :write_spawned
 
+REM Unbuffered Python so logs\export-*.log shows progress during H2/HTTP hangs
+set "PYTHONUNBUFFERED=1"
+set "PYTHONIOENCODING=utf-8"
+
 if /I "%MODE%"=="start" (
   if not defined N8N_HTTP_TIMEOUT_SECONDS set "N8N_HTTP_TIMEOUT_SECONDS=8"
   set "EXPORT_LOG=%LOG_DIR%\export-outbox_flush.log"
   echo [export-trigger] Exporter ^(outbox_flush^)… log=!EXPORT_LOG!
-  "%PYTHON%" "%EXPORTER%" --env-file "%ENV_FILE%" --trigger outbox_flush --flush-only > "!EXPORT_LOG!" 2>&1
+  echo [%DATE% %TIME%] spawn python=!PYTHON! mode=start > "!EXPORT_LOG!"
+  "%PYTHON%" -u "%EXPORTER%" --env-file "%ENV_FILE%" --trigger outbox_flush --flush-only >> "!EXPORT_LOG!" 2>&1
   set "RC=!ERRORLEVEL!"
+  echo [%DATE% %TIME%] python_exit rc=!RC!>> "!EXPORT_LOG!"
   if not "!RC!"=="0" (
     REM Do not overwrite exporter's reason= marker; fallback only if missing
     findstr /C:"reason=" "%DIAG_TMP%\ojv-n8n-sync-exporter-fail.txt" >NUL 2>&1
@@ -145,10 +151,12 @@ if /I "%MODE%"=="exit" (
   )
   set "EXPORT_LOG=%LOG_DIR%\export-jameica_exit.log"
   echo [export-trigger] Exporter ^(jameica_exit^)… log=!EXPORT_LOG!
-  "%PYTHON%" "%EXPORTER%" --env-file "%ENV_FILE%" --trigger jameica_exit > "!EXPORT_LOG!" 2>&1
+  echo [%DATE% %TIME%] spawn python=!PYTHON! mode=exit waitPid=!WAIT_PID! > "!EXPORT_LOG!"
+  "%PYTHON%" -u "%EXPORTER%" --env-file "%ENV_FILE%" --trigger jameica_exit >> "!EXPORT_LOG!" 2>&1
   set "RC=!ERRORLEVEL!"
   if not defined RC set "RC=1"
   if "!RC!"=="" set "RC=1"
+  echo [%DATE% %TIME%] python_exit rc=!RC!>> "!EXPORT_LOG!"
   if not "!RC!"=="0" (
     REM Keep Python reason=missing_webhook / h2_* / …; only fill empty/missing marker
     findstr /C:"reason=" "%DIAG_TMP%\ojv-n8n-sync-exporter-fail.txt" >NUL 2>&1

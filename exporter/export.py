@@ -15,12 +15,23 @@ import json
 import os
 import sys
 import tempfile
+import threading
+import time
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
 from urllib.request import Request, urlopen
+
+# Detached Jameica spawn redirects stdout/stderr to logs/export-*.log — force flush.
+os.environ.setdefault("PYTHONUNBUFFERED", "1")
+try:
+    sys.stdout.reconfigure(line_buffering=True)  # type: ignore[attr-defined]
+    sys.stderr.reconfigure(line_buffering=True)  # type: ignore[attr-defined]
+except Exception:  # noqa: BLE001
+    pass
 
 try:
     from dotenv import load_dotenv
@@ -96,21 +107,129 @@ def write_diag(basename: str, text: str) -> None:
     for path in targets:
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(body, encoding="utf-8")
+            with path.open("w", encoding="utf-8", newline="\n") as f:
+                f.write(body)
+                f.flush()
+                try:
+                    os.fsync(f.fileno())
+                except OSError:
+                    pass
         except OSError:
             pass
 
 
 def append_export_log(trigger: str, text: str) -> None:
-    """Append diagnostic lines to logs/export-<trigger>.log (and ensure file exists)."""
+    """Append diagnostic lines to logs/export-<trigger>.log (always flushed)."""
     try:
         log_dir = repo_root() / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
         path = log_dir / f"export-{trigger}.log"
-        with path.open("a", encoding="utf-8") as f:
+        with path.open("a", encoding="utf-8", newline="\n") as f:
             f.write(f"[{_stamp()}] {text}\n")
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except OSError:
+                pass
     except OSError:
         pass
+
+
+def progress(trigger: str, stage: str, detail: str = "") -> None:
+    """Overwrite progress marker so hang location is visible (TEMP + logs/)."""
+    detail_one = " ".join(str(detail).split())
+    if len(detail_one) > 400:
+        detail_one = detail_one[:397] + "..."
+    line = f"stage={stage}"
+    if detail_one:
+        line += f" detail={detail_one}"
+    line += f" trigger={trigger}"
+    write_diag(f"{DIAG_PREFIX}exporter-progress.txt", line)
+    append_export_log(trigger, f"progress {line}")
+    print(f"[exporter] {line}", flush=True)
+
+
+def env_float(name: str, default: float) -> float:
+    raw = env(name)
+    if raw is None:
+        return default
+    try:
+        return max(1.0, float(raw))
+    except ValueError:
+        return default
+
+
+def env_int_ms(name: str, default_ms: int) -> int:
+    """Seconds env → milliseconds for H2 LOCK_TIMEOUT (min 1000 ms)."""
+    secs = env_float(name, default_ms / 1000.0)
+    return max(1000, int(secs * 1000))
+
+
+def webhook_host(url: str | None) -> str:
+    """Host only — never userinfo/query/secrets."""
+    if not url:
+        return "-"
+    try:
+        p = urlparse(str(url))
+        host = p.hostname or "-"
+        if p.port:
+            return f"{host}:{p.port}"
+        return host
+    except Exception:  # noqa: BLE001
+        return "-"
+
+
+def run_with_timeout(label: str, seconds: float, fn: Callable[[], Any]) -> Any:
+    """Run fn in a daemon thread; raise TimeoutError if it exceeds seconds."""
+    box: dict[str, Any] = {}
+
+    def worker() -> None:
+        try:
+            box["result"] = fn()
+        except BaseException as e:  # noqa: BLE001
+            box["exc"] = e
+
+    t = threading.Thread(target=worker, name=f"ojv-{label}", daemon=True)
+    t.start()
+    t.join(seconds)
+    if t.is_alive():
+        raise TimeoutError(
+            f"{label} exceeded {seconds:.0f}s "
+            f"(likely H2 lock, missing JVM for jaydebeapi, or hung native call)"
+        )
+    if "exc" in box:
+        raise box["exc"]
+    return box.get("result")
+
+
+_WATCHDOG_FIRED = threading.Event()
+
+
+def arm_watchdog(trigger: str, seconds: float) -> None:
+    """Hard-exit if the whole exporter run hangs without writing fail/success."""
+    _WATCHDOG_FIRED.clear()
+
+    def killer() -> None:
+        if _WATCHDOG_FIRED.wait(seconds):
+            return
+        line = (
+            f"reason=watchdog detail=exporter_exceeded_{int(seconds)}s "
+            f"rc=3 trigger={trigger}"
+        )
+        try:
+            write_diag(f"{DIAG_PREFIX}exporter-fail.txt", line)
+            append_export_log(trigger, f"FAIL {line}")
+            progress(trigger, "watchdog", f"exceeded_{int(seconds)}s")
+        except Exception:  # noqa: BLE001
+            pass
+        # Native hang (JDBC/JVM) may leave non-daemon threads — force exit.
+        os._exit(3)
+
+    threading.Thread(target=killer, name="ojv-watchdog", daemon=True).start()
+
+
+def disarm_watchdog() -> None:
+    _WATCHDOG_FIRED.set()
 
 
 def env(name: str, default: str | None = None) -> str | None:
@@ -332,12 +451,18 @@ def webhook_missing(cfg: dict[str, Any]) -> bool:
 def classify_h2_error(exc: BaseException) -> str:
     """Map common H2/JDBC failures to stable reason codes (for markers)."""
     msg = f"{type(exc).__name__}: {exc}".lower()
+    if isinstance(exc, TimeoutError) or "exceeded" in msg and "timeout" in msg.lower():
+        return "h2_connect_timeout"
+    if "timeout" in msg or "timed out" in msg:
+        return "h2_connect_timeout"
     if "locked" in msg or "already in use" in msg or "database may be already" in msg:
         return "jdbc_lock"
     if "h2_jdbc_jar" in msg or ("jar" in msg and ("fehlt" in msg or "not found" in msg or "nicht gefunden" in msg)):
         return "h2_jar_missing"
     if "classnotfound" in msg or "org.h2.driver" in msg:
         return "h2_driver"
+    if "no jvm" in msg or "java home" in msg or "jpype" in msg or "jvm not found" in msg:
+        return "jvm_missing"
     if "access denied" in msg or "wrong user" in msg or "authentication" in msg:
         return "h2_auth"
     if "h2_db_path" in msg or "ifexists" in msg or "database not found" in msg or "nicht gefunden" in msg:
@@ -354,21 +479,36 @@ def fail(
     exc: BaseException | None = None,
 ) -> int:
     """Loud exporter-fail marker; never empty rc=. Detail truncated, no secrets."""
+    disarm_watchdog()
     detail_one = " ".join(str(detail).split())
     if len(detail_one) > 500:
         detail_one = detail_one[:497] + "..."
     line = f"reason={reason} detail={detail_one} rc={rc} trigger={trigger}"
     write_diag(f"{DIAG_PREFIX}exporter-fail.txt", line)
+    progress(trigger, f"fail:{reason}", f"rc={rc}")
     append_export_log(trigger, f"FAIL {line}")
-    print(f"Exporter FAIL: {line}", file=sys.stderr)
+    print(f"Exporter FAIL: {line}", file=sys.stderr, flush=True)
     if exc is not None:
         tb = traceback.format_exc()
         append_export_log(trigger, tb)
         traceback.print_exc()
+        try:
+            sys.stderr.flush()
+        except Exception:  # noqa: BLE001
+            pass
     return rc
 
 
-def connect_h2(cfg: dict[str, Any]):
+def h2_connect_timeout_seconds() -> float:
+    return env_float("H2_CONNECT_TIMEOUT_SECONDS", 30.0)
+
+
+def h2_query_timeout_seconds() -> float:
+    return env_float("H2_QUERY_TIMEOUT_SECONDS", 60.0)
+
+
+def connect_h2(cfg: dict[str, Any], trigger: str = "manual"):
+    progress(trigger, "import_jaydebeapi")
     try:
         import jaydebeapi  # type: ignore
     except ImportError as e:
@@ -384,6 +524,7 @@ def connect_h2(cfg: dict[str, Any]):
     db = cfg["h2_db_path"]
     jar_path = Path(str(jar)).expanduser() if jar else None
     if jar_path is None or not jar_path.is_file():
+        progress(trigger, "resolve_h2_jar")
         # Second chance if load_config ran before install appeared
         found = resolve_h2_jdbc_jar(env("H2_JDBC_JAR"), db)
         if found is not None:
@@ -405,23 +546,58 @@ def connect_h2(cfg: dict[str, Any]):
         )
     # Do not embed absolute personal paths in raised messages beyond env key names
     # ACCESS_MODE_DATA=r: readonly, kein AUTO_SERVER
-    url = f"jdbc:h2:file:{db};ACCESS_MODE_DATA=r;IFEXISTS=TRUE"
-    return jaydebeapi.connect(
-        "org.h2.Driver",
-        url,
-        [cfg["h2_user"], cfg["h2_password"]],
-        str(jar_path),
+    # LOCK_TIMEOUT (ms): avoid infinite wait when Jameica still holds the file lock
+    lock_ms = env_int_ms("H2_CONNECT_TIMEOUT_SECONDS", 30_000)
+    url = (
+        f"jdbc:h2:file:{db};ACCESS_MODE_DATA=r;IFEXISTS=TRUE;"
+        f"LOCK_TIMEOUT={lock_ms};DB_CLOSE_DELAY=0"
+    )
+    connect_secs = h2_connect_timeout_seconds()
+    progress(
+        trigger,
+        "h2_connect",
+        f"timeout_s={connect_secs:.0f} lock_timeout_ms={lock_ms} jar_ok=1",
     )
 
+    def _do_connect():
+        return jaydebeapi.connect(
+            "org.h2.Driver",
+            url,
+            [cfg["h2_user"], cfg["h2_password"]],
+            str(jar_path),
+        )
 
-def fetch_members(conn) -> list[dict[str, Any]]:
-    cur = conn.cursor()
     try:
-        cur.execute(SQL_EXPORT)
-        rows = cur.fetchall()
-        cols = [d[0].lower() for d in (cur.description or [])]
-    finally:
-        cur.close()
+        return run_with_timeout("h2_connect", connect_secs, _do_connect)
+    except TimeoutError:
+        raise
+    except Exception as e:  # noqa: BLE001
+        # JVM / JPype often surfaces here before a real JDBC error
+        msg = f"{type(e).__name__}: {e}".lower()
+        if "jpype" in msg or "jvm" in msg or "java" in msg and "not found" in msg:
+            raise RuntimeError(
+                f"JVM/jaydebeapi start failed: {type(e).__name__}: {e}. "
+                "Install a JRE and ensure JAVA_HOME (or java on PATH) for the "
+                "same user that runs the Jameica detached export-trigger."
+            ) from e
+        raise
+
+
+def fetch_members(conn, trigger: str = "manual") -> list[dict[str, Any]]:
+    query_secs = h2_query_timeout_seconds()
+    progress(trigger, "h2_query", f"timeout_s={query_secs:.0f}")
+
+    def _do_query() -> tuple[list[Any], list[str]]:
+        cur = conn.cursor()
+        try:
+            cur.execute(SQL_EXPORT)
+            rows = cur.fetchall()
+            cols = [d[0].lower() for d in (cur.description or [])]
+            return rows, cols
+        finally:
+            cur.close()
+
+    rows, cols = run_with_timeout("h2_query", query_secs, _do_query)
 
     members: list[dict[str, Any]] = []
     for row in rows:
@@ -437,6 +613,7 @@ def fetch_members(conn) -> list[dict[str, Any]]:
         }
         if member["insta"] or member["website"] or member["flyer"]:
             members.append(member)
+    progress(trigger, "h2_query_done", f"members={len(members)}")
     return members
 
 
@@ -473,20 +650,28 @@ def write_csv(path: Path, members: list[dict[str, Any]]) -> None:
 
 def http_timeout_seconds() -> float:
     """Webhook timeout; start/outbox flush should stay short (env override)."""
-    raw = env("N8N_HTTP_TIMEOUT_SECONDS", "60") or "60"
-    try:
-        return max(1.0, float(raw))
-    except ValueError:
-        return 60.0
+    return env_float("N8N_HTTP_TIMEOUT_SECONDS", 60.0)
 
 
-def post_webhook(cfg: dict[str, Any], payload: dict[str, Any]) -> None:
+def exporter_watchdog_seconds() -> float:
+    """Whole-run ceiling so a hung JDBC/JVM still leaves exporter-fail."""
+    return env_float("EXPORTER_WATCHDOG_SECONDS", 180.0)
+
+
+def post_webhook(cfg: dict[str, Any], payload: dict[str, Any], trigger: str = "manual") -> None:
     url = cfg["webhook_url"]
     if webhook_missing(cfg):
         raise RuntimeError(
             "N8N_WEBHOOK_URL ist nicht gesetzt bzw. noch Platzhalter. "
             "Lokale .env anpassen."
         )
+    host = webhook_host(url)
+    timeout_s = http_timeout_seconds()
+    progress(trigger, "http_post", f"host={host} timeout_s={timeout_s:.0f}")
+    write_diag(
+        f"{DIAG_PREFIX}exporter-http.txt",
+        f"webhook POST start trigger={trigger} host={host} timeout_s={timeout_s:.0f}",
+    )
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     headers = {
         "Content-Type": "application/json; charset=utf-8",
@@ -496,10 +681,18 @@ def post_webhook(cfg: dict[str, Any], payload: dict[str, Any]) -> None:
     if secret and secret != "CHANGE_ME_WEBHOOK_SECRET":
         headers["X-Webhook-Secret"] = secret
     req = Request(url, data=body, headers=headers, method="POST")
-    with urlopen(req, timeout=http_timeout_seconds()) as resp:
-        code = getattr(resp, "status", None) or resp.getcode()
-        if code is None or int(code) >= 400:
-            raise RuntimeError(f"Webhook HTTP {code}")
+    try:
+        with urlopen(req, timeout=timeout_s) as resp:
+            code = getattr(resp, "status", None) or resp.getcode()
+            if code is None or int(code) >= 400:
+                raise RuntimeError(f"Webhook HTTP {code}")
+    except TimeoutError as e:
+        raise TimeoutError(f"webhook host={host} timeout_s={timeout_s:.0f}") from e
+    except URLError as e:
+        reason = getattr(e, "reason", e)
+        if isinstance(reason, TimeoutError) or "timed out" in str(reason).lower():
+            raise TimeoutError(f"webhook host={host} timeout_s={timeout_s:.0f}") from e
+        raise
 
 
 def save_outbox(outbox_dir: Path, payload: dict[str, Any], err: str) -> Path:
@@ -515,12 +708,16 @@ def save_outbox(outbox_dir: Path, payload: dict[str, Any], err: str) -> Path:
     return path
 
 
-def flush_outbox(cfg: dict[str, Any]) -> int:
+def flush_outbox(cfg: dict[str, Any], trigger: str = "manual") -> int:
     """Retry pending outbox payloads (oldest first). Returns remaining count."""
     outbox = cfg["outbox_dir"]
     if not outbox.is_dir():
         return 0
     files = sorted(outbox.glob("einwilligungen-*.json"))
+    if not files:
+        progress(trigger, "outbox_empty")
+        return 0
+    progress(trigger, "outbox_flush", f"files={len(files)}")
     remaining = 0
     for path in files:
         try:
@@ -528,23 +725,30 @@ def flush_outbox(cfg: dict[str, Any]) -> int:
             payload = data.get("payload") if isinstance(data, dict) else None
             if not isinstance(payload, dict):
                 payload = data
-            post_webhook(cfg, payload)
+            post_webhook(cfg, payload, trigger=trigger)
             path.unlink(missing_ok=True)
-            print(f"Outbox OK: {path.name}")
+            print(f"Outbox OK: {path.name}", flush=True)
         except Exception as e:  # noqa: BLE001
             remaining += 1
-            print(f"Outbox Retry fehlgeschlagen ({path.name}): {e}", file=sys.stderr)
+            print(f"Outbox Retry fehlgeschlagen ({path.name}): {e}", file=sys.stderr, flush=True)
             break
     leftover = sorted(outbox.glob("einwilligungen-*.json"))
     return len(leftover) if leftover else remaining
 
 
 def export_from_h2(cfg: dict[str, Any], trigger: str) -> dict[str, Any]:
-    conn = connect_h2(cfg)
+    conn = None
     try:
-        members = fetch_members(conn)
+        conn = connect_h2(cfg, trigger=trigger)
+        progress(trigger, "h2_connected")
+        members = fetch_members(conn, trigger=trigger)
     finally:
-        conn.close()
+        if conn is not None:
+            try:
+                progress(trigger, "h2_close")
+                conn.close()
+            except Exception as e:  # noqa: BLE001
+                append_export_log(trigger, f"h2_close error: {type(e).__name__}: {e}")
     return build_payload(members, trigger)
 
 
@@ -555,97 +759,148 @@ def run(
     skip_flush: bool = False,
     env_file: Path | None = None,
 ) -> int:
+    watchdog_s = exporter_watchdog_seconds()
     write_diag(
         f"{DIAG_PREFIX}exporter-start.txt",
-        f"exporter start trigger={trigger} flush_only={flush_only}",
+        f"exporter start trigger={trigger} flush_only={flush_only} "
+        f"watchdog_s={watchdog_s:.0f}",
     )
-    append_export_log(trigger, f"start flush_only={flush_only} env_file={env_file}")
-
-    cfg, resolved_env = load_config(env_file)
-    cfg["output_dir"].mkdir(parents=True, exist_ok=True)
-    cfg["outbox_dir"].mkdir(parents=True, exist_ok=True)
-    if cfg.get("h2_jdbc_jar_resolved") and cfg.get("h2_jdbc_jar"):
-        append_export_log(
-            trigger,
-            f"H2_JDBC_JAR ok (file present or auto-discovered under Jameica homes)",
-        )
-
-    if resolved_env is None:
-        return fail(
-            trigger,
-            "missing_env_file",
-            "no .env found — copy .env.example to .env and set N8N_WEBHOOK_URL + H2_*",
-            rc=2,
-        )
-
-    # Fail loud before H2 / HTTP when webhook is missing or still placeholder
-    if webhook_missing(cfg):
-        return fail(
-            trigger,
-            "missing_webhook",
-            "N8N_WEBHOOK_URL unset or still N8N_HOST_PLACEHOLDER — set real URL in .env (N8N_WEBHOOK_SECRET optional if n8n has no auth)",
-            rc=2,
-        )
-
-    if not skip_flush:
-        left = flush_outbox(cfg)
-        if left:
-            print(f"Outbox: {left} Datei(en) warten auf nächsten Exit oder manuellen Flush.")
-
-    if flush_only:
-        write_diag(
-            f"{DIAG_PREFIX}exporter-http.txt",
-            f"flush_only done trigger={trigger}",
-        )
-        append_export_log(trigger, "flush_only done")
-        return 0
-
+    append_export_log(
+        trigger,
+        f"start flush_only={flush_only} env_file={env_file} watchdog_s={watchdog_s:.0f}",
+    )
+    progress(trigger, "started", f"flush_only={flush_only}")
+    arm_watchdog(trigger, watchdog_s)
+    rc = 2
     try:
-        payload = export_from_h2(cfg, trigger)
-    except Exception as e:  # noqa: BLE001
-        reason = classify_h2_error(e)
-        return fail(
+        progress(trigger, "load_config")
+        cfg, resolved_env = load_config(env_file)
+        progress(
             trigger,
-            reason,
-            f"{type(e).__name__}: {e}",
-            rc=2,
-            exc=e,
+            "config_loaded",
+            f"env={'1' if resolved_env else '0'} "
+            f"jar_resolved={'1' if cfg.get('h2_jdbc_jar_resolved') else '0'} "
+            f"webhook_host={webhook_host(cfg.get('webhook_url'))}",
         )
+        cfg["output_dir"].mkdir(parents=True, exist_ok=True)
+        cfg["outbox_dir"].mkdir(parents=True, exist_ok=True)
+        if cfg.get("h2_jdbc_jar_resolved") and cfg.get("h2_jdbc_jar"):
+            append_export_log(
+                trigger,
+                "H2_JDBC_JAR ok (file present or auto-discovered under Jameica homes)",
+            )
 
-    json_path = cfg["output_dir"] / "einwilligungen.json"
-    csv_path = cfg["output_dir"] / "einwilligungen.csv"
-    write_json(json_path, payload)
-    write_csv(csv_path, payload["members"])
-    member_count = len(payload["members"])
-    print(f"Export: {member_count} Mitglieder → {json_path} , {csv_path}")
-    append_export_log(trigger, f"exported members={member_count}")
+        if resolved_env is None:
+            rc = fail(
+                trigger,
+                "missing_env_file",
+                "no .env found — copy .env.example to .env and set N8N_WEBHOOK_URL + H2_*",
+                rc=2,
+            )
+            return rc
 
-    try:
-        post_webhook(cfg, payload)
-        write_diag(
-            f"{DIAG_PREFIX}exporter-http.txt",
-            f"webhook OK trigger={trigger} members={member_count}",
-        )
-        append_export_log(trigger, "webhook OK")
-        print("Webhook OK")
-        return 0
-    except (HTTPError, URLError, RuntimeError, TimeoutError, OSError) as e:
-        path = save_outbox(cfg["outbox_dir"], payload, str(e))
-        err_kind = type(e).__name__
-        http_code = getattr(e, "code", None)
-        write_diag(
-            f"{DIAG_PREFIX}exporter-http.txt",
-            f"webhook FAIL trigger={trigger} err={err_kind} http={http_code} outbox=1",
-        )
-        print(f"Webhook fehlgeschlagen ({e}) → Outbox {path}", file=sys.stderr)
-        # Also mark exporter-fail so TEMP always has a clear reason (rc never empty)
-        return fail(
-            trigger,
-            "webhook_http",
-            f"{err_kind} http={http_code} outbox=1",
-            rc=1,
-            exc=e,
-        )
+        # Fail loud before H2 / HTTP when webhook is missing or still placeholder
+        if webhook_missing(cfg):
+            rc = fail(
+                trigger,
+                "missing_webhook",
+                "N8N_WEBHOOK_URL unset or still N8N_HOST_PLACEHOLDER — set real URL in .env (N8N_WEBHOOK_SECRET optional if n8n has no auth)",
+                rc=2,
+            )
+            return rc
+
+        if not skip_flush:
+            left = flush_outbox(cfg, trigger=trigger)
+            if left:
+                print(
+                    f"Outbox: {left} Datei(en) warten auf nächsten Exit oder manuellen Flush.",
+                    flush=True,
+                )
+
+        if flush_only:
+            write_diag(
+                f"{DIAG_PREFIX}exporter-http.txt",
+                f"flush_only done trigger={trigger} host={webhook_host(cfg.get('webhook_url'))}",
+            )
+            progress(trigger, "flush_only_done")
+            append_export_log(trigger, "flush_only done")
+            rc = 0
+            return rc
+
+        try:
+            payload = export_from_h2(cfg, trigger)
+        except Exception as e:  # noqa: BLE001
+            reason = classify_h2_error(e)
+            rc = fail(
+                trigger,
+                reason,
+                f"{type(e).__name__}: {e}",
+                rc=2,
+                exc=e,
+            )
+            return rc
+
+        progress(trigger, "write_output")
+        json_path = cfg["output_dir"] / "einwilligungen.json"
+        csv_path = cfg["output_dir"] / "einwilligungen.csv"
+        write_json(json_path, payload)
+        write_csv(csv_path, payload["members"])
+        member_count = len(payload["members"])
+        print(f"Export: {member_count} Mitglieder → {json_path} , {csv_path}", flush=True)
+        append_export_log(trigger, f"exported members={member_count}")
+
+        host = webhook_host(cfg.get("webhook_url"))
+        try:
+            post_webhook(cfg, payload, trigger=trigger)
+            write_diag(
+                f"{DIAG_PREFIX}exporter-http.txt",
+                f"webhook OK trigger={trigger} host={host} members={member_count}",
+            )
+            progress(trigger, "http_ok", f"host={host} members={member_count}")
+            append_export_log(trigger, f"webhook OK host={host}")
+            print("Webhook OK", flush=True)
+            write_diag(
+                f"{DIAG_PREFIX}exporter-success.txt",
+                f"ok trigger={trigger} host={host} members={member_count} rc=0",
+            )
+            rc = 0
+            return rc
+        except (HTTPError, URLError, RuntimeError, TimeoutError, OSError) as e:
+            path = save_outbox(cfg["outbox_dir"], payload, str(e))
+            err_kind = type(e).__name__
+            http_code = getattr(e, "code", None)
+            write_diag(
+                f"{DIAG_PREFIX}exporter-http.txt",
+                f"webhook FAIL trigger={trigger} host={host} err={err_kind} "
+                f"http={http_code} outbox=1",
+            )
+            progress(trigger, "http_fail", f"host={host} err={err_kind}")
+            print(
+                f"Webhook fehlgeschlagen ({e}) → Outbox {path}",
+                file=sys.stderr,
+                flush=True,
+            )
+            reason = (
+                "webhook_timeout"
+                if isinstance(e, TimeoutError) or "timeout" in str(e).lower()
+                else "webhook_http"
+            )
+            rc = fail(
+                trigger,
+                reason,
+                f"{err_kind} host={host} http={http_code} outbox=1",
+                rc=1,
+                exc=e,
+            )
+            return rc
+    finally:
+        disarm_watchdog()
+        try:
+            append_export_log(trigger, f"run_end rc={rc}")
+            sys.stdout.flush()
+            sys.stderr.flush()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -687,4 +942,11 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        raise SystemExit(main())
+    finally:
+        try:
+            sys.stdout.flush()
+            sys.stderr.flush()
+        except Exception:  # noqa: BLE001
+            pass

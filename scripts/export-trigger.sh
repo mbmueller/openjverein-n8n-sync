@@ -93,16 +93,24 @@ fi
 diag_marker "ojv-n8n-sync-trigger-spawned.txt" \
   "export-trigger mode=${MODE} waitPid=${WAIT_PID:--} root=${REPO_ROOT} envFile=${ENV_FILE} python=${PYTHON}"
 
+# Unbuffered Python so logs/export-*.log shows progress during H2/HTTP hangs
+export PYTHONUNBUFFERED=1
+export PYTHONIOENCODING="${PYTHONIOENCODING:-utf-8}"
+
 run_exporter() {
   local trigger="$1"
   shift
   local export_log="${LOG_DIR}/export-${trigger}.log"
   log "Exporter (${trigger})… log=${export_log}"
+  {
+    echo "[$(date -Iseconds 2>/dev/null || date)] spawn python=${PYTHON} mode=${MODE} trigger=${trigger}"
+  } >"${export_log}"
   set +e
-  "${PYTHON}" "${EXPORTER}" --env-file "${ENV_FILE}" --trigger "${trigger}" "$@" \
-    >"${export_log}" 2>&1
+  "${PYTHON}" -u "${EXPORTER}" --env-file "${ENV_FILE}" --trigger "${trigger}" "$@" \
+    >>"${export_log}" 2>&1
   local rc=$?
   set -e
+  echo "[$(date -Iseconds 2>/dev/null || date)] python_exit rc=${rc}" >>"${export_log}"
   if [[ "${rc}" -ne 0 ]]; then
     # Keep Python's reason=* marker; only write fallback if missing/empty rc
     local fail_tmp="${TMPDIR:-${TEMP:-${TMP:-/tmp}}}/ojv-n8n-sync-exporter-fail.txt"
