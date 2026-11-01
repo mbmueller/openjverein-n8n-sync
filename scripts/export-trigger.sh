@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-# Thin launcher for Jameica Scripting hooks. No Cron.
+# Called by launcher/ after Jameica exits (or manually). No Cron. No Scripting.
 # Usage:
-#   export-trigger.sh start              # Outbox flush only (manuell; Jameica startet das nicht)
-#   export-trigger.sh exit [JAMEICA_PID] # wartet auf PID-Ende, dann Full-Export
-# Jameica ruft nur "exit" detached auf — niemals waitFor auf dem Scripting-/Shutdown-Thread.
+#   export-trigger.sh start              # Outbox flush only
+#   export-trigger.sh exit [JAMEICA_PID] # optional wait for PID, then Full-Export
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

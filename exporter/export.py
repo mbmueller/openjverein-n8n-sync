@@ -2,9 +2,9 @@
 """
 OpenJVerein Bildnutzungs-Einwilligungen → JSON/CSV → n8n Webhook.
 
-Primärpfad: Jameica Scripting (scripts/) ruft nach Exit diesen Exporter auf;
-H2 readonly lesen (kein AUTO_SERVER). Bei POST-Fehler: Outbox;
-Retry beim nächsten Exit oder manuell (export-trigger start).
+Primärpfad: launcher/ startet Jameica und ruft nach Exit export-trigger → diesen
+Exporter auf; H2 readonly (kein AUTO_SERVER). Bei POST-Fehler: Outbox;
+Retry beim nächsten Launcher-Exit oder manuell (export-trigger start).
 """
 
 from __future__ import annotations

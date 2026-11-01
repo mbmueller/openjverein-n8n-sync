@@ -1,14 +1,12 @@
 #!/usr/bin/env bash
-# OPTIONAL / DEPRECATED: Wrapper um die Jameica-Binary.
-# Primärpfad: scripts/jameica-openjverein-sync.js (Jameica Scripting).
-# Sync nur bei Start/Exit — kein Cron.
+# Primary launcher: start Jameica, wait for exit, then export-trigger.
+# Pin/use this instead of raw jameica.sh — UI unchanged; sync runs after Beenden.
+# No Cron. No Jameica Scripting.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 ENV_FILE="${ENV_FILE:-${REPO_ROOT}/.env}"
-
-echo "[wrapper] Exit-Sync nach Jameica-Ende (zuverlässig ohne Scripting-Eval). Siehe README." >&2
 
 if [[ -f "${ENV_FILE}" ]]; then
   set -a
@@ -18,7 +16,7 @@ if [[ -f "${ENV_FILE}" ]]; then
 fi
 
 JAMEICA_BIN="${JAMEICA_BIN:-}"
-FLUSH_OUTBOX_ON_START="${FLUSH_OUTBOX_ON_START:-1}"
+FLUSH_OUTBOX_ON_START="${FLUSH_OUTBOX_ON_START:-0}"
 TRIGGER="${REPO_ROOT}/scripts/export-trigger.sh"
 
 die() { echo "Fehler: $*" >&2; exit 1; }
@@ -32,12 +30,12 @@ if [[ "${FLUSH_OUTBOX_ON_START}" == "1" ]]; then
   "${TRIGGER}" start || true
 fi
 
-echo "[wrapper] Starte Jameica: ${JAMEICA_BIN}"
+echo "[launcher] Starte Jameica: ${JAMEICA_BIN}"
 set +e
 "${JAMEICA_BIN}" "$@"
 JAMEICA_RC=$?
 set -e
-echo "[wrapper] Jameica beendet (rc=${JAMEICA_RC})"
+echo "[launcher] Jameica beendet (rc=${JAMEICA_RC}) — starte Export…"
 
 "${TRIGGER}" exit
 

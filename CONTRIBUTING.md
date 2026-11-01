@@ -58,21 +58,23 @@ python exporter/export.py --trigger jameica_exit
 python exporter/export.py --flush-only
 ```
 
-**Exit-Export** (zuverlässig — siehe README „Zuverlässiger Exit-Trigger“):
+**Launcher** (Primärpfad — Jameica starten, nach Exit Export; siehe README):
 
 ```bash
-chmod +x scripts/export-trigger.sh
-./scripts/export-trigger.sh exit   # nach Jameica-Ende / zum Test
-# Windows: scripts\export-trigger.cmd exit  (oder Desktop-Shortcut)
+chmod +x launcher/jameica-launcher.sh scripts/export-trigger.sh
+./launcher/jameica-launcher.sh
+# Windows: launcher\jameica-launcher.cmd
+#          oder .\launcher\create-desktop-shortcut.ps1  (einmal pinnen)
 ```
 
-**Hang-Diagnose** (optional): Recovery → `minimal.js`; Sync-`.js` ist absichtlich leer — kein SYSTEM_SHUTDOWN in Scripting (hängt beim Eval).
-
-**Wrapper** (Launcher: Jameica blockierend, danach Export):
+**Manueller Exit-Export** (Fallback / Test):
 
 ```bash
-./wrapper/jameica-wrapper.sh
+./scripts/export-trigger.sh exit
+# Windows: scripts\export-trigger.cmd exit
 ```
+
+**Scripting:** nicht für Sync. Alte Hänger: Recovery im README; Sync-`.js` bewusst leer / nicht registrieren.
 
 n8n-Workflow: `n8n/einwilligung-bildnutzung.json` importieren, Drive-Credential und Ordner-IDs **nur in der n8n-UI** setzen, Webhook-Secret an lokale `.env` anbinden.
 

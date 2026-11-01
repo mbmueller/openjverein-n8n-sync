@@ -1,9 +1,8 @@
 @echo off
-REM Thin launcher for Jameica Scripting hooks (Windows). Sync nur bei Exit — kein Task Scheduler.
+REM Called by launcher\ after Jameica exits (or manually). No Task Scheduler. No Scripting.
 REM Usage:
-REM   export-trigger.cmd start              REM Outbox manuell (Jameica startet das nicht)
+REM   export-trigger.cmd start
 REM   export-trigger.cmd exit [JAMEICA_PID]
-REM Jameica ruft nur exit detached auf — niemals waitFor auf dem Scripting-/Shutdown-Thread.
 setlocal EnableExtensions EnableDelayedExpansion
 set "SCRIPT_DIR=%~dp0"
 set "REPO_ROOT=%SCRIPT_DIR%.."
@@ -29,7 +28,6 @@ if exist "%ENV_FILE%" (
 )
 
 if /I "%MODE%"=="start" (
-  REM Nur Outbox — kurzer HTTP-Timeout; kein H2 beim Start
   if not defined N8N_HTTP_TIMEOUT_SECONDS set "N8N_HTTP_TIMEOUT_SECONDS=8"
   echo [export-trigger] Exporter ^(outbox_flush^)…
   "%PYTHON%" "%EXPORTER%" --env-file "%ENV_FILE%" --trigger outbox_flush --flush-only

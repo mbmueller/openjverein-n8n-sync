@@ -1,20 +1,13 @@
 /**
- * OpenJVerein → n8n Sync — bewusst leer beim Scripting-Load.
+ * NICHT für Sync verwendet.
  *
- * Befund: Eine leere/minimale .js startet Jameica. Jede Top-Level-Arbeit mit
- * Packages / Java.type / JavaAdapter / MessageConsumer (SYSTEM_SHUTDOWN)
- * hängt ScriptingService.eval nach SYSTEM_STARTED — auch ohne Start-Sync.
+ * Jameica Scripting mit Java-Interop (Packages / Java.type / MessageConsumer)
+ * hängt beim ScriptingService.eval — bestätigt: leere .js startet, unser Hook nicht.
+ * SYSTEM_SHUTDOWN lässt sich so nicht sicher registrieren.
  *
- * Deshalb: diese Datei registriert bewusst KEINEN Shutdown-Consumer und führt
- * kein Java-Interop aus. Sync nur extern nach Jameica-Ende:
+ * Sync-Pfad: launcher/ (startet Jameica, nach Exit → export-trigger).
+ * Diese Datei nicht unter Einstellungen → Scripting registrieren.
+ * Falls noch registriert: No-Op (nur Kommentar) — Sync läuft trotzdem nur über den Launcher.
  *
- *   scripts/export-trigger.sh exit
- *   scripts\export-trigger.cmd exit
- *   oder wrapper/ / Desktop-Shortcut (siehe README)
- *
- * Diagnose: scripts/jameica-openjverein-sync.minimal.js
- * Recovery (hängende alte Version): README „Jameica hängt beim Start?“
- *
- * Diese Datei darf in Scripting stehen (No-Op) oder weggelassen werden —
- * der Exit-Export braucht sie nicht.
+ * Diagnose alter Hänger: jameica-openjverein-sync.minimal.js + README Recovery.
  */

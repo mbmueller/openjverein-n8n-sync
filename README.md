@@ -6,79 +6,20 @@ Synchronisiert die Zusatzfelder **`insta`**, **`website`**, **`flyer`** (Ja/Nein
 
 **Lizenz:** [PolyForm Noncommercial 1.0.0](LICENSE) — frei nutzbar, änderbar und weitergebbar **nichtkommerziell**; **kein Verkauf** der Software. Details und Mitwirken: [CONTRIBUTING.md](CONTRIBUTING.md).
 
-**Trigger:** nach sauberem Jameica-Ende `scripts/export-trigger` ausführen (Windows-Shortcut, Wrapper oder manuell). Kein Cron, kein Task Scheduler. Fehlgeschlagene Uploads landen in `outbox/` und werden beim **nächsten Exit-Lauf** erneut versucht.
-
-**Kein Shutdown-Hook in Scripting:** Leere/minimale `.js` startet Jameica; schon `MessageConsumer`/`Packages`/`Java.type` beim Eval hängt den Start (bestätigt). `SYSTEM_SHUTDOWN` lässt sich so nicht sicher registrieren → **nur externer Post-Exit-Trigger**. Die Sync-`.js` im Repo ist bewusst leer (Kommentar); `minimal.js` nur zur Diagnose.
+**Trigger:** Jameica über den **Launcher** starten; nach Prozessende läuft der Export automatisch. Kein Cron, kein manuelles Export-Klicken im Alltag, kein Jameica-Scripting-Hook.
 
 ## Architektur (kurz)
 
-1. Jameica normal nutzen (OpenJVerein / H2).
-2. Nach **Beenden**: `export-trigger exit` wartet ggf. auf Prozessende, liest H2 **readonly**, flushed Outbox.
+1. **Launcher** startet Jameica (UI unverändert).
+2. Nach **Beenden**: Launcher ruft `export-trigger exit` → H2 **readonly** → JSON/CSV → n8n.
 3. Filter: nur **aktive** Mitglieder (`austritt` leer) mit **mindestens einer** Einwilligung.
-4. Schreibt `einwilligungen.json` + `.csv`, POSTet an n8n (`X-Webhook-Secret`).
-5. n8n legt Dateien unter Drive `aktuell/` und datiertem `archiv/` ab (optional `meta/last-sync.json`).
+4. n8n schreibt Drive `aktuell/` + datiertes `archiv/` (optional `meta/last-sync.json`).
 
 Kill/Absturz/Stromausfall: kein Exit-Lauf → Drive behält den **letzten erfolgreichen Sync**. Das ist **OK**.
 
-## Jameica hängt beim Start? — Dateisystem-Recovery (ohne UI)
-
-Jameica wertet registrierte Scripts **synchron** nach `SYSTEM_STARTED` aus (`ScriptingService.eval`). Schon das **Laden/Auswerten** einer `.js` (nicht erst „Start-Sync“) kann vor der Settings-UI einfrieren — z. B. durch `Packages` / `Java.type` / `JavaAdapter` / `MessageConsumer` auf dem Top-Level. Die UI ist dann unerreichbar.
-
-### 1. Jameica und Sync-Kinder beenden
-
-Task-Manager / `kill`: Jameica, ggf. hängende `export-trigger`, `python`/`python3`, `cmd` aus diesem Repo.
-
-### 2. Workdir finden
-
-| OS | Standard-Workdir |
-|----|------------------|
-| **Windows** | `%USERPROFILE%\.jameica\` → z. B. `C:\Users\<Name>\.jameica\` |
-| **Linux** | `~/.jameica/` |
-| **macOS** | `~/Library/jameica/` (neu); falls vorhanden weiter `~/.jameica/` |
-
-Abweichendes Workdir: Startparameter `-f <pfad>` oder Hinweis im Jameica-Log.
-
-### 3. Scripting-Config (empfohlen)
-
-Datei (UTF-8 / Properties):
-
 ```text
-<workdir>/cfg/de.willuhn.jameica.services.ScriptingService.properties
+Launcher → Jameica … Beenden → export-trigger exit → Exporter → n8n → Drive
 ```
-
-Beispiel Windows: `C:\Users\<Name>\.jameica\cfg\de.willuhn.jameica.services.ScriptingService.properties`
-
-Darin Zeilen wie:
-
-```properties
-scripts.0=C\:\\Users\\…\\openjverein-n8n-sync\\scripts\\jameica-openjverein-sync.js
-```
-
-**Deaktivieren:** die `scripts.N=`-Zeile(n) mit `jameica-openjverein-sync` (oder `.minimal.js`) löschen oder die ganze Datei kurz in `….properties.bak` umbenennen (entfernt alle registrierten Scripts). Speichern → Jameica neu starten.
-
-Optional prüfen: `cfg/de.willuhn.jameica.scripting.Plugin.properties` (ältere Installationen).
-
-### 4. Schnellvariante: `.js` umbenennen
-
-Die registrierte Datei umbenennen, z. B. `jameica-openjverein-sync.js` → `jameica-openjverein-sync.js.bak`. Fehlt/unlesbar → ScriptingService überspringt sie (Boot-Warnung möglich), Jameica startet. Config-Zeile danach in den Einstellungen oder wie unter (3) aufräumen.
-
-### 5. Test mit `minimal.js` (nach Recovery)
-
-1. Recovery wie oben, Jameica startet **ohne** Sync-Script.
-2. Optional **nur** `scripts/jameica-openjverein-sync.minimal.js` registrieren (nahezu leer).
-3. Start OK → leere Scripts sind fein; Hang kam vom früheren Sync-Inhalt (Java beim Eval).
-4. Sync **nicht** wieder über Scripting-Consumer lösen — Exit nur über `export-trigger` (unten).
-
-### 6. Danach
-
-Aktuelles Repo ziehen. Alte Sync-`.js` aus der Scripting-Liste entfernen (oder durch die leere Repo-Version ersetzen). Sync-Weg: `export-trigger` nach Exit.
-
-## Voraussetzungen
-
-- Jameica / OpenJVerein lokal
-- Python 3.10+ und Java (für H2-JDBC via JayDeBeApi)
-- Erreichbare n8n-Instanz (Webhook + Google-Drive-Credential **in n8n**)
-- H2-JDBC-JAR (oft bei Jameica/OpenJVerein mitgeliefert)
 
 ## Setup
 
@@ -89,77 +30,87 @@ python3 -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r exporter/requirements.txt
 cp .env.example .env
-# .env ausfüllen: N8N_*, H2_DB_PATH, H2_JDBC_JAR
-chmod +x scripts/export-trigger.sh
+# .env: JAMEICA_BIN, N8N_*, H2_DB_PATH, H2_JDBC_JAR
+chmod +x launcher/jameica-launcher.sh scripts/export-trigger.sh
 ```
 
 ### Wichtige `.env`-Platzhalter
 
 | Variable | Bedeutung |
 |----------|-----------|
+| `JAMEICA_BIN` | Pfad zu `jameica.exe` / `jameica.sh` |
 | `N8N_WEBHOOK_URL` | z. B. `https://<dein-n8n>/webhook/einwilligung-bildnutzung` |
 | `N8N_WEBHOOK_SECRET` | gemeinsames Secret; Header `X-Webhook-Secret` |
 | `H2_DB_PATH` | H2-Datei **ohne** `.mv.db`-Suffix |
 | `H2_JDBC_JAR` | Pfad zur `h2-*.jar` |
-| `OPENJVEREIN_N8N_SYNC_ROOT` | optional: absoluter Repo-Pfad (sonst `SYNC_ROOT` in der `.js`) |
+| `FLUSH_OUTBOX_ON_START` | optional `1` = vor Start nur Outbox flushen (Default `0`) |
 | `EXIT_H2_SETTLE_SECONDS` | Pause nach Exit vor H2-Öffnen (Default `2`) |
 
 Keine echten Secrets ins Git committen.
 
-## Zuverlässiger Exit-Trigger (empfohlen)
+## Launcher — einmal Shortcut, danach automatisch
 
-Jameica beenden, **danach** (H2 freigegeben) den Exporter starten. Kein Scripting-Eval nötig.
+Primärweg: **nicht** `jameica.exe` / `jameica.sh` direkt starten, sondern den Launcher. Nach **Datei → Beenden** folgt der Sync von allein.
 
-### Windows: Shortcut nach Exit
+### Windows (einmalig)
 
-1. Jameica wie gewohnt beenden (**Datei → Beenden**).
-2. Verknüpfung oder `.cmd` auf:
+1. `.env` mit `JAMEICA_BIN=…\jameica.exe` (und H2/n8n) füllen.
+2. Desktop-Verknüpfung erzeugen:
 
-```cmd
-C:\Pfad\zu\openjverein-n8n-sync\scripts\export-trigger.cmd exit
+```powershell
+.\launcher\create-desktop-shortcut.ps1
 ```
 
-Arbeitsverzeichnis = Repo-Root (oder `OPENJVEREIN_N8N_SYNC_ROOT` / `.env` setzen). Optional Verknüpfung ins Startmenü / auf den Desktop.
+3. Die neue Verknüpfung (**„Jameica (OpenJVerein Sync)“**) ins Startmenü / Taskleiste **pinnen**.
+4. Ab jetzt nur noch diese Verknüpfung nutzen — nicht die nackte `jameica.exe`.
 
-### Windows / Linux: Wrapper (startet Jameica, danach Export)
+Manuell: Verknüpfung auf `launcher\jameica-launcher.cmd`, Arbeitsverzeichnis = Repo-Root.
 
-Startet Jameica **blockierend** und ruft danach denselben `export-trigger exit` auf — sinnvoll, wenn man **einen** Launcher will und Scripting meidet:
+### Linux
 
 ```bash
-./wrapper/jameica-wrapper.sh
+./launcher/jameica-launcher.sh
+# optional Argumente an Jameica:
+./launcher/jameica-launcher.sh --irgendwas
 ```
 
-Windows: `wrapper\jameica-wrapper.cmd` (Pfad zur Jameica-Binary in der Datei / Umgebung setzen). Details: [`wrapper/README.md`](wrapper/README.md).
+Einmalig: Desktop-Entry / Menüeintrag / Alias auf dieses Skript legen und statt Roh-`jameica.sh` nutzen.
 
-### Mini-Watcher (Idee)
+Details: [`launcher/README.md`](launcher/README.md).
 
-Externer Prozess beobachtet die Jameica-PID und startet nach Ende `export-trigger exit` — gleiches Ergebnis wie Shortcut, ohne die Binary zu wrappen. Kein Muss; Shortcut oder Wrapper reichen fürs MVP.
-
-### Manuell
-
-```bash
-./scripts/export-trigger.sh exit           # Full-Export (Jameica sollte zu sein)
-./scripts/export-trigger.sh start          # nur Outbox (manuell)
-python exporter/export.py --trigger jameica_exit
-```
-
-Windows:
-
-```cmd
-scripts\export-trigger.cmd exit
-scripts\export-trigger.cmd start
-```
-
-## Jameica-Scripting: bewusst kein Hook
-
-`scripts/jameica-openjverein-sync.js` ist **leer** (nur Kommentar). Registrierung ist optional und ändert nichts am Sync. **`SYSTEM_SHUTDOWN`-Consumer in JS weglassen** — die Registrierung (Java-Interop beim Eval) hängt den Start.
+### Ablauf
 
 | Zeitpunkt | Aktion |
 |-----------|--------|
-| Jameica-Start / Script-Load | nichts (leere `.js` oder kein Script) |
-| Nach Jameica-Ende | `export-trigger exit` (Shortcut / Wrapper / manuell) |
+| Start über Launcher | Jameica wie gewohnt |
+| Nach Exit | `export-trigger exit` → Full-Export + Outbox-Retry → n8n |
 
-Diagnose: `minimal.js` — siehe Recovery §5.
+### Fallback (manuell)
+
+Nur wenn der Launcher nicht genutzt wurde:
+
+```bash
+./scripts/export-trigger.sh exit
+# Windows: scripts\export-trigger.cmd exit
+python exporter/export.py --trigger jameica_exit
+```
+
+Ordner-Watcher: bewusst **nicht** im MVP.
+
+## Jameica-Scripting: nicht für Sync
+
+Scripting mit Java-Interop hängt beim Load (`ScriptingService.eval`) — bestätigt: leere `.js` startet, Hook-Code nicht. Deshalb:
+
+- Sync **nur** über Launcher / `export-trigger`, **nicht** über registrierte Scripts.
+- `scripts/jameica-openjverein-sync.js` ist Kommentar-only und **soll nicht** unter Einstellungen → Scripting stehen.
+- `minimal.js` nur zur Hang-Diagnose nach Recovery.
+
+### Falls Jameica noch wegen alter Sync-`.js` hängt
+
+1. Jameica / hängende Kinder beenden.
+2. Workdir: Windows `%USERPROFILE%\.jameica\`, Linux `~/.jameica/`, macOS oft `~/Library/jameica/`.
+3. In `cfg/de.willuhn.jameica.services.ScriptingService.properties` Zeilen `scripts.N=…jameica-openjverein-sync…` entfernen **oder** die `.js` umbenennen (`.bak`).
+4. Jameica neu starten; Sync weiter nur über Launcher.
 
 ## n8n-Workflow importieren
 
@@ -201,7 +152,6 @@ Dieses Repo ist **publishbar**: keine echten Hosts, Tokens oder DB-Pfade.
 
 ## Hinweise
 
-- Sync **nur** nach Exit über `export-trigger` (H2 freigegeben).
-- Sync-`.js` absichtlich leer; `MessageConsumer`/`Packages` beim Eval hängen (leere Datei startet). `minimal.js` = Diagnose.
+- Primärpfad: **Launcher** → Exit → Export. Kein Cron, kein Scripting-Hook.
 - Filter „≥1 Einwilligung“ im Exporter; n8n als Sicherheitsnetz.
-- Kein Tagesplan: Sync nach Jameica-Ende (Outbox-Retry manuell oder nächster Exit-Lauf).
+- Voraussetzungen: Jameica/OpenJVerein, Python 3.10+, Java (JayDeBeApi/H2-JAR), erreichbares n8n.

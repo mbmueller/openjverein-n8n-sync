@@ -1,13 +1,12 @@
-# OPTIONAL / DEPRECATED: Wrapper um die Jameica-Binary (Windows).
-# Primärpfad: scripts/jameica-openjverein-sync.js (Jameica Scripting).
-# Sync nur bei Start/Exit — kein Task Scheduler / Cron.
+# Primary launcher (Windows): start Jameica, wait for exit, then export-trigger.
+# Pin/use this instead of raw jameica.exe — UI unchanged; sync runs after Beenden.
+# No Task Scheduler / Cron. No Jameica Scripting.
 param(
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$JameicaArgs
 )
 
 $ErrorActionPreference = "Stop"
-Write-Host "[wrapper] Exit-Sync nach Jameica-Ende (zuverlaessig ohne Scripting-Eval). Siehe README." -ForegroundColor Yellow
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot = Resolve-Path (Join-Path $ScriptDir "..")
@@ -34,7 +33,7 @@ function Import-DotEnv([string]$Path) {
 Import-DotEnv $EnvFile
 
 $JameicaBin = $env:JAMEICA_BIN
-$FlushOnStart = if ($env:FLUSH_OUTBOX_ON_START) { $env:FLUSH_OUTBOX_ON_START } else { "1" }
+$FlushOnStart = if ($env:FLUSH_OUTBOX_ON_START) { $env:FLUSH_OUTBOX_ON_START } else { "0" }
 
 if (-not $JameicaBin) { throw "JAMEICA_BIN nicht gesetzt (.env)" }
 if (-not (Test-Path $JameicaBin)) { throw "JAMEICA_BIN nicht gefunden: $JameicaBin" }
@@ -44,10 +43,10 @@ if ($FlushOnStart -eq "1") {
     try { & $Trigger start } catch { }
 }
 
-Write-Host "[wrapper] Starte Jameica: $JameicaBin"
+Write-Host "[launcher] Starte Jameica: $JameicaBin"
 $proc = Start-Process -FilePath $JameicaBin -ArgumentList $JameicaArgs -Wait -PassThru
 $rc = $proc.ExitCode
-Write-Host "[wrapper] Jameica beendet (rc=$rc)"
+Write-Host "[launcher] Jameica beendet (rc=$rc) — starte Export…"
 
 & $Trigger exit
 exit $rc
