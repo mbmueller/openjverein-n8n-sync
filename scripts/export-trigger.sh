@@ -9,7 +9,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 ENV_FILE="${ENV_FILE:-${REPO_ROOT}/.env}"
-PYTHON="${PYTHON:-python3}"
+# PYTHON: optional Override (ENV/.env). Sonst .venv, sonst PATH — siehe resolve_python
 EXPORTER="${REPO_ROOT}/exporter/export.py"
 MODE="${1:-}"
 WAIT_PID="${2:-}"
@@ -42,8 +42,17 @@ write_fail() {
     "reason=${reason} detail=${detail} rc=${rc} mode=${MODE} python=${PYTHON}"
 }
 
+# Prefer SYNC_ROOT/.venv (Jameica-Spawn aktiviert die venv nicht → oft System-Python ohne jaydebeapi).
+# Absoluter PYTHON=-Pfad (executable) überschreibt; bloßer Name "python3" verliert gegen .venv.
 resolve_python() {
-  if command -v "${PYTHON}" >/dev/null 2>&1; then
+  if [[ -n "${PYTHON:-}" && -x "${PYTHON}" ]]; then
+    return 0
+  fi
+  if [[ -x "${REPO_ROOT}/.venv/bin/python" ]]; then
+    PYTHON="${REPO_ROOT}/.venv/bin/python"
+    return 0
+  fi
+  if [[ -n "${PYTHON:-}" ]] && command -v "${PYTHON}" >/dev/null 2>&1; then
     return 0
   fi
   if command -v python3 >/dev/null 2>&1; then
@@ -76,13 +85,13 @@ set -a
 source "${ENV_FILE}"
 set +a
 
+if ! resolve_python; then
+  write_fail python_not_found "no_.venv_and_python_not_on_PATH_create_.venv_or_set_PYTHON" 127
+  die "python nicht gefunden (weder ${REPO_ROOT}/.venv/bin/python noch PATH)"
+fi
+
 diag_marker "ojv-n8n-sync-trigger-spawned.txt" \
   "export-trigger mode=${MODE} waitPid=${WAIT_PID:--} root=${REPO_ROOT} envFile=${ENV_FILE} python=${PYTHON}"
-
-if ! resolve_python; then
-  write_fail python_not_found "python_not_on_PATH_when_spawned_from_Jameica_install_Python_or_set_PYTHON" 127
-  die "python nicht auf PATH (${PYTHON})"
-fi
 
 run_exporter() {
   local trigger="$1"

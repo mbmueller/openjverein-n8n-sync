@@ -208,7 +208,11 @@ def connect_h2(cfg: dict[str, Any]):
         import jaydebeapi  # type: ignore
     except ImportError as e:
         raise RuntimeError(
-            "jaydebeapi fehlt. Installieren: pip install -r exporter/requirements.txt"
+            "jaydebeapi fehlt. Im Repo-Root: "
+            "python -m venv .venv && "
+            ".venv/bin/pip install -r exporter/requirements.txt "
+            "(Windows: .venv\\Scripts\\pip …). "
+            "export-trigger nutzt .venv automatisch; sonst: pip install -r exporter/requirements.txt"
         ) from e
 
     jar = cfg["h2_jdbc_jar"]

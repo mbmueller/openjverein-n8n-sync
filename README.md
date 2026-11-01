@@ -37,6 +37,19 @@ cp .env.example .env
 chmod +x scripts/export-trigger.sh
 ```
 
+### Python-venv (wichtig für Jameica)
+
+Jameica startet `export-trigger` **detached** — die Shell-`activate` gilt dort nicht. Deshalb:
+
+1. Im **Repo-Root** (`SYNC_ROOT`) eine venv anlegen und Dependencies installieren (siehe oben).
+2. `export-trigger` bevorzugt automatisch:
+   - Windows: `SYNC_ROOT\.venv\Scripts\python.exe`
+   - Linux/macOS: `SYNC_ROOT/.venv/bin/python`
+3. Reihenfolge: existierende Datei in `PYTHON=` → sonst `.venv` → sonst `python`/`python3`/`py` auf dem PATH.
+4. Fehlt `jaydebeapi` im gewählten Interpreter → lauter Fail (`reason=h2_connect`, Detail mit Install-Hinweis). Kein stiller Skip.
+
+Optional Override: absoluter `PYTHON=C:\Pfad\zu\python.exe` in der Umgebung oder `.env` (schlägt `.venv`).
+
 ### Wichtige `.env`-Platzhalter
 
 | Variable | Bedeutung |
@@ -104,7 +117,8 @@ Typische Ursachen (oft kombiniert):
 | `ENABLE_START_OUTBOX_FLUSH = false` (Default) | **Kein** Start-Webhook — Absicht; Export nur nach Beenden |
 | Nur Fenster schließen / Kill statt **Datei → Beenden** | JVM-Hook kann ausbleiben |
 | `.env` fehlt / `N8N_WEBHOOK_URL` fehlt oder Platzhalter | `exporter-fail` mit `reason=missing_env_file` bzw. `reason=missing_webhook` |
-| `python` nicht auf PATH (Jameica-Spawn) | `exporter-fail` `reason=python_not_found` — Python installieren oder `PYTHON=` setzen |
+| `python` nicht auf PATH und keine `.venv` | `exporter-fail` `reason=python_not_found` — venv anlegen oder `PYTHON=` setzen |
+| `jaydebeapi` fehlt (System-Python ohne Deps) | `exporter-fail` `reason=h2_connect` Detail `jaydebeapi fehlt` — `.venv` + `pip install -r exporter/requirements.txt` (Trigger nutzt `.venv` automatisch) |
 | `H2_DB_PATH` / `H2_JDBC_JAR` falsch | `exporter-fail` `reason=h2_path` / `h2_jar_missing` — siehe `logs/export-*.log` |
 | H2 noch gelockt (Jameica nicht weg) | `exporter-fail` `reason=jdbc_lock` — Settle erhöhen / sauber beenden |
 | Webhook-HTTP-Fehler | `exporter-http` FAIL + `exporter-fail` `reason=webhook_http` + Outbox |
