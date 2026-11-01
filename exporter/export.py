@@ -381,12 +381,8 @@ def _is_h2_jdbc_jar(path: Path) -> bool:
     return name == "h2.jar" or name.startswith("h2-")
 
 
-def _jar_sort_key(path: Path) -> tuple[int, tuple[int, ...], str]:
-    """Prefer versioned h2-*.jar with higher semver; plain h2.jar last among peers."""
-    name = path.name.lower()
-    if name == "h2.jar":
-        return (0, (0,), name)
-    # h2-2.3.232.jar / h2-1.4.199-fork.jar
+def _h2_jar_version_nums(name: str) -> tuple[int, ...]:
+    """Parse leading version ints from h2-*.jar names (e.g. h2-1.4.199-fork.jar)."""
     ver_part = name[3:-4] if name.startswith("h2-") and name.endswith(".jar") else name
     nums: list[int] = []
     for chunk in ver_part.replace("-", ".").split("."):
@@ -394,7 +390,34 @@ def _jar_sort_key(path: Path) -> tuple[int, tuple[int, ...], str]:
             nums.append(int(chunk))
         else:
             break
-    return (1, tuple(nums), name)
+    return tuple(nums)
+
+
+def _jar_sort_key(path: Path) -> tuple[int, tuple[int, ...], str]:
+    """
+    Prefer h2-1.4.*.jar over H2 2.x.
+
+    Typical OpenJVerein / JVerein DBs are MVStore format 1 (H2 1.4.x). A newer
+    Jameica lib/h2 2.x jar opens format 3 only and fails with H2 error 90048
+    (Unsupported database file version / read format 1 < supported format 3).
+    Plain h2.jar ranks last among peers.
+    """
+    name = path.name.lower()
+    if name == "h2.jar":
+        return (0, (0,), name)
+    nums = _h2_jar_version_nums(name)
+    major = nums[0] if nums else 0
+    minor = nums[1] if len(nums) > 1 else 0
+    # Higher tier wins with reverse=True: 1.4.x > other 1.x > 2.x+ > unknown
+    if major == 1 and minor == 4:
+        tier = 3
+    elif major == 1:
+        tier = 2
+    elif major >= 2:
+        tier = 1
+    else:
+        tier = 0
+    return (tier, nums, name)
 
 
 def discover_h2_jars(roots: list[Path]) -> list[Path]:
@@ -440,6 +463,9 @@ def resolve_h2_jdbc_jar(configured: str | None, h2_db_path: str | None = None) -
     """
     Use H2_JDBC_JAR if the file exists; otherwise discover under JAMEICA_HOME /
     Program Files / %USERPROFILE%\\.jameica plugin+lib trees.
+
+    Auto-pick prefers h2-1.4.*.jar (format-1 OpenJVerein DBs) over H2 2.x, and
+    non-migration-enabled paths over migration-h2/enabled forks.
     """
     if configured:
         p = Path(configured).expanduser()
@@ -512,6 +538,17 @@ def classify_h2_error(exc: BaseException) -> str:
         return "jdbc_lock"
     if "h2_jdbc_jar" in msg or ("jar" in msg and ("fehlt" in msg or "not found" in msg or "nicht gefunden" in msg)):
         return "h2_jar_missing"
+    # H2 90048: driver MVStore format newer than on-disk DB (e.g. 2.x jar vs format-1 file)
+    if (
+        "90048" in msg
+        or "unsupported database file version" in msg
+        or "datei version wird nicht unterstützt" in msg
+        or "ungültiger dateikopf" in msg
+        or "invalid file header" in msg
+        or "read format" in msg
+        or "supported format" in msg
+    ):
+        return "h2_format_mismatch"
     if "classnotfound" in msg or "org.h2.driver" in msg:
         return "h2_driver"
     if "no jvm" in msg or "java home" in msg or "jpype" in msg or "jvm not found" in msg:
@@ -828,11 +865,13 @@ def run(
     try:
         progress(trigger, "load_config")
         cfg, resolved_env = load_config(env_file)
+        jar_name = Path(str(cfg["h2_jdbc_jar"])).name if cfg.get("h2_jdbc_jar") else "-"
         progress(
             trigger,
             "config_loaded",
             f"env={'1' if resolved_env else '0'} "
             f"jar_resolved={'1' if cfg.get('h2_jdbc_jar_resolved') else '0'} "
+            f"jar={jar_name} "
             f"webhook_host={webhook_host(cfg.get('webhook_url'))}",
         )
         cfg["output_dir"].mkdir(parents=True, exist_ok=True)
@@ -840,7 +879,8 @@ def run(
         if cfg.get("h2_jdbc_jar_resolved") and cfg.get("h2_jdbc_jar"):
             append_export_log(
                 trigger,
-                "H2_JDBC_JAR ok (file present or auto-discovered under Jameica homes)",
+                f"H2_JDBC_JAR ok path={cfg['h2_jdbc_jar']} "
+                "(explicit .env or auto-discovered; prefers h2-1.4.* over 2.x)",
             )
 
         if resolved_env is None:

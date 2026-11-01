@@ -75,7 +75,7 @@ Keine echten Secrets und **keine persönlichen Absolutpfade** ins Git committen 
 Bevorzugt **Forward-Slashes, unquoted**:
 
 ```env
-H2_JDBC_JAR=E:/path/to/h2-2.3.232.jar
+H2_JDBC_JAR=E:/path/to/h2-1.4.199.jar
 H2_DB_PATH=E:/Users/YOU/.jameica/openjverein/h2db/openjverein
 JAMEICA_HOME=E:/path/to/jameica
 ```
@@ -84,19 +84,21 @@ Backslashes ohne Quotes sind oft ok, Quotes um Windows-Pfade nicht. Der Exporter
 
 ### H2-JDBC-JAR finden (Windows / Jameica / OpenJVerein)
 
-Fehler `reason=h2_jar_missing` bedeutet: JayDeBeApi braucht die Datei `h2-*.jar` (Klasse `org.h2.Driver`). Die JAR kommt mit Jameica, nicht mit diesem Repo.
+Fehler `reason=h2_jar_missing` bedeutet: JayDeBeApi braucht die Datei `h2-*.jar` (Klasse `org.h2.Driver`). Die JAR kommt mit Jameica/OpenJVerein, nicht mit diesem Repo.
+
+**Version / Format:** Typische OpenJVerein-/JVerein-DBs liegen im MVStore-**Format 1** (H2 **1.4.x**). Ein H2-**2.x**-JAR (Format 3) kann diese Dateien **nicht** öffnen — Fehler **90048** (`Unsupported database file version` / `The read format 1 is smaller than the supported format 3`). Deshalb **`h2-1.4.*.jar` bevorzugen**, nicht die neueste `lib\h2\h2-2…`.jar. Die Live-DB nicht „nebenbei“ mit einem 2.x-Treiber migrieren.
 
 **Wo suchen (Explorer oder PowerShell `Get-ChildItem -Recurse -Filter 'h2-*.jar'`):**
 
-1. **Jameica-Programmordner** (dort liegt `jameica-win64.exe` / `jameica.exe`):
-   - `lib\h2\h2-*.jar` oder `lib\h2\h2.jar`
-   - neuere Builds: `lib\h2\migration-h2\disabled\h2-*.jar` (Default, wenn `migration-h2=false`) bzw. `…\enabled\…`
-2. **Plugin-JARs** unter dem Workdir: `%USERPROFILE%\.jameica\plugins\**\h2-*.jar` (und ggf. unter dem Install-`plugins\`-Ordner).
+1. **Plugin-JARs** (oft die passende 1.4.x): `%USERPROFILE%\.jameica\plugins\**\h2-1.4*.jar` (und ggf. Install-`plugins\`).
+2. **Jameica-Programmordner** (dort liegt `jameica-win64.exe` / `jameica.exe`):
+   - `lib\h2\h2-1.4*.jar` / `lib\h2\h2-*.jar` oder `lib\h2\h2.jar`
+   - neuere Builds: `lib\h2\migration-h2\disabled\h2-*.jar` (Default, wenn `migration-h2=false`) bzw. `…\enabled\…` — dort oft 2.x; nur nutzen, wenn die DB wirklich Format 3 ist.
 3. Typische Install-Wurzeln: `C:\Program Files\jameica*`, `C:\Programme\jameica*`, portable Ordner neben der `.exe`.
 
-In `.env` setzen, z. B. `H2_JDBC_JAR=E:/path/to/jameica/lib/h2/h2-2.x.x.jar` (unquoted, Forward-Slashes) — **nur lokal**. Optional `JAMEICA_HOME` auf denselben Programmordner setzen.
+In `.env` setzen, z. B. `H2_JDBC_JAR=E:/path/to/h2-1.4.199.jar` (unquoted, Forward-Slashes) — **nur lokal**. Optional `JAMEICA_HOME` auf denselben Programmordner setzen.
 
-Der Exporter sucht automatisch unter `JAMEICA_HOME` / `JAMEICA_BIN`, `%USERPROFILE%\.jameica`, Program Files und Eltern von `H2_DB_PATH`, wenn `H2_JDBC_JAR` leer ist oder die Datei fehlt. Expliziter Pfad bleibt die zuverlässigste Variante.
+Der Exporter sucht automatisch unter `JAMEICA_HOME` / `JAMEICA_BIN`, `%USERPROFILE%\.jameica`, Program Files und Eltern von `H2_DB_PATH`, wenn `H2_JDBC_JAR` leer ist oder die Datei fehlt. Auto-Discovery **bevorzugt `h2-1.4.*.jar` vor H2 2.x**. Expliziter Pfad zur passenden Major-Version bleibt die zuverlässigste Variante; den gewählten Pfad schreibt der Exporter nach `logs/export-*.log` (`H2_JDBC_JAR ok path=…`).
 
 ### H2_DB_PATH (OpenJVerein-Datenbank)
 
@@ -168,7 +170,8 @@ Typische Ursachen (oft kombiniert):
 | `.env` fehlt / `N8N_WEBHOOK_URL` fehlt oder Platzhalter | `exporter-fail` mit `reason=missing_env_file` bzw. `reason=missing_webhook` |
 | `python` nicht auf PATH und keine `.venv` | `exporter-fail` `reason=python_not_found` — venv anlegen oder `PYTHON=` setzen |
 | `jaydebeapi` fehlt (System-Python ohne Deps) | `exporter-fail` `reason=h2_connect` Detail `jaydebeapi fehlt` — `.venv` + `pip install -r exporter/requirements.txt` (Trigger nutzt `.venv` automatisch) |
-| `H2_JDBC_JAR` fehlt / falscher Pfad / in `.env` mit `"…"` gequotet | `exporter-fail` `reason=h2_jar_missing` — JAR unter Jameica `lib\h2\` suchen; **keine** doppelten Quotes (Escape `\t`/`\2`); `H2_JDBC_JAR=E:/path/to/h2-2.x.x.jar` |
+| `H2_JDBC_JAR` fehlt / falscher Pfad / in `.env` mit `"…"` gequotet | `exporter-fail` `reason=h2_jar_missing` — JAR unter Plugins/`lib\h2\` suchen; **keine** doppelten Quotes (Escape `\t`/`\2`); `H2_JDBC_JAR=E:/path/to/h2-1.4.x.jar` |
+| H2 **90048** / Format-Mismatch (2.x-JAR vs Format-1-DB) | `exporter-fail` `reason=h2_format_mismatch` — Detail enthält `90048` / `Unsupported database file version` / `read format 1` … `format 3`. **`h2-1.4.*.jar` setzen** (gleiche Major wie OpenJVerein), nicht `h2-2…` |
 | `H2_DB_PATH` falsch | `exporter-fail` `reason=h2_path` — typisch `%USERPROFILE%\.jameica\openjverein\h2db\openjverein` ohne `.mv.db` |
 | H2 noch gelockt (Jameica nicht weg) | `exporter-fail` `reason=jdbc_lock` — Settle erhöhen / sauber beenden |
 | H2-Connect hängt / Timeout | `exporter-progress` bleibt bei `h2_connect` → danach `reason=h2_connect_timeout` (oder `watchdog`) |
