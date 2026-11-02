@@ -238,21 +238,70 @@ Optional später: winziges Java-Plugin, das bei `SYSTEM_SHUTDOWN` `QueryMessage(
 
 ## n8n-Workflow importieren
 
-1. In n8n: **Workflow importieren** → `n8n/einwilligung-bildnutzung.json`
-2. Google-Drive-OAuth-Credential **in der n8n-UI** anlegen und an die Drive-Nodes hängen (Dummy-IDs im JSON ersetzen).
-3. Ordner-IDs setzen für:
+Datei: [`n8n/einwilligung-bildnutzung.json`](n8n/einwilligung-bildnutzung.json)
+
+1. In n8n: **Workflows → Import from File** → JSON aus dem Repo wählen.
+2. Google-Drive-OAuth-Credential **nur in der n8n-UI** anlegen und an **alle** Drive-Nodes hängen (Platzhalter-Credential ersetzen).
+3. Ordner-IDs (Drive-URL: `…/folders/<ID>`) in den Nodes setzen:
    - `aktuell/` → `DRIVE_FOLDER_ID_AKTUELL_PLACEHOLDER`
-   - `archiv/` → `DRIVE_FOLDER_ID_ARCHIV_PLACEHOLDER`
-4. Webhook-URL an lokale `.env` anbinden; Secret nur wenn der Workflow/Auth es verlangt.
+   - `archiv/` (Parent; Workflow legt `YYYY-MM-DD/` darunter an) → `DRIVE_FOLDER_ID_ARCHIV_PLACEHOLDER`
+   - `meta/` → `DRIVE_FOLDER_ID_META_PLACEHOLDER`
+4. Webhook: Method **POST**, Path **`einwilligung-bildnutzung`**, Authentication **None** (optional Secret s. unten).
+5. Workflow **aktivieren**; Production-URL (`/webhook/einwilligung-bildnutzung`, nicht `/webhook-test/…`) in lokale `.env` als `N8N_WEBHOOK_URL` übernehmen.
+6. Optional Secret: Env `N8N_WEBHOOK_SECRET` in n8n setzen **und** denselben Wert lokal. Leer / Platzhalter `CHANGE_ME_WEBHOOK_SECRET` = kein Check (Auth=None). Sonst Header `X-Webhook-Secret`.
+
+Hinweis: Drive-Nodes nutzen **Upload** mit Binary-Feld `data`. Davor liegen kurze Code-Nodes (`Binär …`), die aus `Validieren + CSV` die passende Datei als `data` legen. Jeder Sync kann in `aktuell/` eine weitere Datei gleichen Namens anlegen — nach dem ersten erfolgreichen Lauf alte Duplikate löschen oder später feste Datei-IDs verdrahten.
+
+**Live-Fehler** `expects … binary file 'data', but none was found`: Drive-Node steht auf Upload ohne Binary-Vorgänger — Workflow aus diesem Repo neu importieren (nicht nur Credential tauschen).
+
+### Bestehenden Live-Workflow ersetzen (z. B. `x8NZl6KCcVAphLWy` auf https://1648943.xyz/)
+
+1. Live-Workflow **deaktivieren** (Production-Webhook stoppt).
+2. Optional: Node-Grafik / Credential-Namen notieren, dann Workflow **löschen** oder umbenennen und deaktiviert lassen.
+3. Frische JSON aus dem Repo **importieren** (neuer Workflow, neue interne ID ist OK).
+4. Drive-Credential + die drei Ordner-IDs setzen (s. oben).
+5. Aktivieren; Production-Webhook-URL prüfen.
+6. Lokale `.env`: `N8N_WEBHOOK_URL` auf die neue Production-URL zeigen lassen (Pfad bleibt `…/webhook/einwilligung-bildnutzung`, Host unverändert).
+7. Smoke: `python exporter/export.py --trigger manual` (User-Agent-Fix vorausgesetzt) oder ein kleiner POST mit Exporter-Payload-Shape.
+
+Exporter-Body (Referenz):
+
+```json
+{
+  "exported_at": "…",
+  "source": "openjverein",
+  "trigger": "jameica_exit",
+  "fields": ["insta", "website", "flyer"],
+  "members": [
+    {
+      "id": 1,
+      "mitgliedsnummer": "…",
+      "name": "…",
+      "vorname": "…",
+      "insta": true,
+      "website": false,
+      "flyer": true
+    }
+  ]
+}
+```
 
 ## Drive-Layout
 
 ```text
-…/<DRIVE-ORDNER>/
-  aktuell/einwilligungen.{json,csv}
-  archiv/YYYY-MM-DD/…
-  meta/last-sync.json   # optional
+…/<DRIVE-ORDNER-NOCH-OFFEN>/
+  aktuell/
+    einwilligungen.json
+    einwilligungen.csv
+  archiv/
+    YYYY-MM-DD/
+      einwilligungen.json
+      einwilligungen.csv
+  meta/
+    last-sync.json
 ```
+
+Arbeitsdatei für Medien: **`aktuell/einwilligungen.csv`**.
 
 ## Was nicht (MVP)
 
