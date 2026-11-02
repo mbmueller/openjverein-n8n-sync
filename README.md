@@ -6,24 +6,23 @@ Synchronisiert die Zusatzfelder **`insta`**, **`website`**, **`flyer`** (Ja/Nein
 
 **Lizenz:** [PolyForm Noncommercial 1.0.0](LICENSE) — frei nutzbar, änderbar und weitergebbar **nichtkommerziell**; **kein Verkauf** der Software. Details und Mitwirken: [CONTRIBUTING.md](CONTRIBUTING.md).
 
-**Trigger:** nur beim **Start und/oder Exit** von Jameica (Wrapper). Kein Cron, kein Task Scheduler. Fehlgeschlagene Uploads landen in `outbox/` und werden beim **nächsten** Start/Exit erneut versucht.
+**Trigger:** Jameica **normal starten** (kein Launcher/Wrapper). Automation über **Jameica Scripting**. Kein Cron.
 
+**Pflicht:** In `scripts/jameica-openjverein-sync.js` oben `SYNC_ROOT = "C:\\Pfad\\zu\\openjverein-n8n-sync"` setzen. `OPENJVEREIN_N8N_SYNC_ROOT` greift nur als **Jameica-Prozess-ENV** (Windows System/User oder Verknüpfung) — nicht aus einer Shell-`.env`.
 ## Architektur (kurz)
 
-1. Wrapper startet Jameica (optional: Outbox flushen).
-2. Nach sauberem Exit: Exporter liest H2 **readonly** (Datei entsperrt, kein `AUTO_SERVER`).
-3. Filter: nur **aktive** Mitglieder (`austritt` leer) mit **mindestens einer** Einwilligung.
-4. Schreibt `einwilligungen.json` + `.csv`, POSTet an n8n (`X-Webhook-Secret`).
-5. n8n legt Dateien unter Drive `aktuell/` und datiertem `archiv/` ab (optional `meta/last-sync.json`).
+1. Jameica wie gewohnt starten; Sync-Script unter **Einstellungen → Scripting** registrieren.
+2. Beim Laden: Script meldet sich an (deferred); **kein** `MessageConsumer` (das hing früher beim Start).
+3. Beim sauberen Beenden (**Datei → Beenden**): `Application.shutDown()` → `System.exit` → `Runtime.addShutdownHook` startet `export-trigger exit` **detached** → H2 readonly → JSON/CSV → n8n.
+4. Filter: nur **aktive** Mitglieder mit **mindestens einer** Einwilligung.
 
-Kill/Absturz/Stromausfall: Exit-Hook kann ausbleiben → Drive behält den **letzten erfolgreichen Sync**. Das ist **OK**.
+**Kein Webhook beim Start** (Standard): `ENABLE_START_OUTBOX_FLUSH = false` — Full-Export nur beim Beenden. Start-Outbox ist optional.
 
-## Voraussetzungen
+Kill/Absturz: kein Exit-Lauf → Drive behält den **letzten erfolgreichen Sync**. Das ist **OK**.
 
-- Jameica / OpenJVerein lokal
-- Python 3.10+ und Java (für H2-JDBC via JayDeBeApi)
-- Erreichbare n8n-Instanz (Webhook + Google-Drive-Credential **in n8n**)
-- H2-JDBC-JAR (oft bei Jameica/OpenJVerein mitgeliefert)
+```text
+Jameica (Scripting) … Datei→Beenden → Runtime-Hook → export-trigger exit → Exporter → n8n → Drive
+```
 
 ## Setup
 
@@ -34,58 +33,208 @@ python3 -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r exporter/requirements.txt
 cp .env.example .env
-# .env ausfüllen: N8N_*, JAMEICA_BIN, H2_DB_PATH, H2_JDBC_JAR
-chmod +x wrapper/jameica-wrapper.sh
+# .env: N8N_*, H2_DB_PATH, H2_JDBC_JAR
+chmod +x scripts/export-trigger.sh
 ```
+
+### Python-venv (wichtig für Jameica)
+
+Jameica startet `export-trigger` **detached** — die Shell-`activate` gilt dort nicht. Deshalb:
+
+1. Im **Repo-Root** (`SYNC_ROOT`) eine venv anlegen und Dependencies installieren (siehe oben).
+2. `export-trigger` bevorzugt automatisch:
+   - Windows: `SYNC_ROOT\.venv\Scripts\python.exe`
+   - Linux/macOS: `SYNC_ROOT/.venv/bin/python`
+3. Reihenfolge: existierende Datei in `PYTHON=` → sonst `.venv` → sonst `python`/`python3`/`py` auf dem PATH.
+4. Fehlt `jaydebeapi` im gewählten Interpreter → lauter Fail (`reason=h2_connect`, Detail mit Install-Hinweis). Kein stiller Skip.
+
+Optional Override: absoluter `PYTHON=C:\Pfad\zu\python.exe` in der Umgebung oder `.env` (schlägt `.venv`).
 
 ### Wichtige `.env`-Platzhalter
 
 | Variable | Bedeutung |
 |----------|-----------|
 | `N8N_WEBHOOK_URL` | z. B. `https://<dein-n8n>/webhook/einwilligung-bildnutzung` |
-| `N8N_WEBHOOK_SECRET` | optional; leer bei n8n Auth=None, sonst Header `X-Webhook-Secret` |
-| `JAMEICA_BIN` | Pfad zu `jameica.sh` / `.exe` |
-| `H2_DB_PATH` | H2-Datei **ohne** `.mv.db`-Suffix |
-| `H2_JDBC_JAR` | Pfad zur `h2-*.jar` |
-| `FLUSH_OUTBOX_ON_START` | `1` = vor Start nur Outbox flushen |
+| `N8N_WEBHOOK_SECRET` | **optional**, wenn n8n-Webhook-Auth = None; sonst gemeinsames Secret → Header `X-Webhook-Secret` (leer/Platzhalter → Header wird weggelassen) |
+| `H2_DB_PATH` | H2-Datei **ohne** `.mv.db` / `.h2.db`-Suffix (siehe unten) |
+| `H2_JDBC_JAR` | Pfad zur `h2-*.jar` (siehe unten; Auto-Discovery falls Datei fehlt) |
+| `JAMEICA_HOME` | optional: Jameica-Installationsordner — verbessert JAR-Suche |
+| `EXIT_H2_SETTLE_SECONDS` | Pause nach Exit vor H2-Öffnen (Default `2`) |
+| `H2_CONNECT_TIMEOUT_SECONDS` | Max. Sekunden für JDBC-Connect (Default `30`; setzt auch H2 `LOCK_TIMEOUT`) |
+| `H2_QUERY_TIMEOUT_SECONDS` | Max. Sekunden für Export-SQL (Default `60`) |
+| `N8N_HTTP_TIMEOUT_SECONDS` | Webhook-HTTP-Timeout (Default `60`; Start-Flush setzt `8`) |
+| `EXPORTER_WATCHDOG_SECONDS` | Gesamtlauf-Deckel; danach `reason=watchdog` + Hard-Exit (Default `180`) |
+| `OPENJVEREIN_N8N_SYNC_ROOT` | optional statt `SYNC_ROOT` in der `.js` |
 
-Keine echten Secrets ins Git committen.
+Keine echten Secrets und **keine persönlichen Absolutpfade** ins Git committen (nur lokale `.env`).
 
-## Wrapper lokal nutzen
+### Windows-Pfade in `.env` (wichtig)
 
-**Linux/macOS** — statt Jameica direkt den Wrapper starten:
+**Keine doppelten Anführungszeichen** um Pfade. `python-dotenv` wertet Escape-Sequenzen in `"…"` aus — z. B. wird `\t` in `E:\path\to\…` zum Tab, und Pfade mit `h2-2…` können beschädigt werden.
+
+Bevorzugt **Forward-Slashes, unquoted**:
+
+```env
+H2_JDBC_JAR=E:/path/to/h2-1.4.199.jar
+H2_DB_PATH=E:/Users/YOU/.jameica/openjverein/h2db/openjverein
+JAMEICA_HOME=E:/path/to/jameica
+```
+
+Backslashes ohne Quotes sind oft ok, Quotes um Windows-Pfade nicht. Der Exporter lädt `.env` raw (ohne Escape-Decoding) und strippt restliche umschließende Quotes.
+
+### H2-JDBC-JAR finden (Windows / Jameica / OpenJVerein)
+
+Fehler `reason=h2_jar_missing` bedeutet: JayDeBeApi braucht die Datei `h2-*.jar` (Klasse `org.h2.Driver`). Die JAR kommt mit Jameica/OpenJVerein, nicht mit diesem Repo.
+
+**Version / Format:** Typische OpenJVerein-/JVerein-DBs liegen im MVStore-**Format 1** (H2 **1.4.x**). Ein H2-**2.x**-JAR (Format 3) kann diese Dateien **nicht** öffnen — Fehler **90048** (`Unsupported database file version` / `The read format 1 is smaller than the supported format 3`). Deshalb **`h2-1.4.*.jar` bevorzugen**, nicht die neueste `lib\h2\h2-2…`.jar. Die Live-DB nicht „nebenbei“ mit einem 2.x-Treiber migrieren.
+
+**Wo suchen (Explorer oder PowerShell `Get-ChildItem -Recurse -Filter 'h2-*.jar'`):**
+
+1. **Plugin-JARs** (oft die passende 1.4.x): `%USERPROFILE%\.jameica\plugins\**\h2-1.4*.jar` (und ggf. Install-`plugins\`).
+2. **Jameica-Programmordner** (dort liegt `jameica-win64.exe` / `jameica.exe`):
+   - `lib\h2\h2-1.4*.jar` / `lib\h2\h2-*.jar` oder `lib\h2\h2.jar`
+   - neuere Builds: `lib\h2\migration-h2\disabled\h2-*.jar` (Default, wenn `migration-h2=false`) bzw. `…\enabled\…` — dort oft 2.x; nur nutzen, wenn die DB wirklich Format 3 ist.
+3. Typische Install-Wurzeln: `C:\Program Files\jameica*`, `C:\Programme\jameica*`, portable Ordner neben der `.exe`.
+
+In `.env` setzen, z. B. `H2_JDBC_JAR=E:/path/to/h2-1.4.199.jar` (unquoted, Forward-Slashes) — **nur lokal**. Optional `JAMEICA_HOME` auf denselben Programmordner setzen.
+
+Der Exporter sucht automatisch unter `JAMEICA_HOME` / `JAMEICA_BIN`, `%USERPROFILE%\.jameica`, Program Files und Eltern von `H2_DB_PATH`, wenn `H2_JDBC_JAR` leer ist oder die Datei fehlt. Auto-Discovery **bevorzugt `h2-1.4.*.jar` vor H2 2.x**. Expliziter Pfad zur passenden Major-Version bleibt die zuverlässigste Variante. **Jeder Lauf** schreibt den aufgelösten Pfad plus Quelle (`source=env` | `discovery` | `missing`) prominent nach `%TEMP%\ojv-n8n-sync-h2-jdbc-jar.txt` und `logs/export-*.log` (Zeile `H2_JDBC_JAR source=… path=…`).
+
+### H2_DB_PATH (OpenJVerein-Datenbank)
+
+Pfad zur H2-Datenbank **ohne** Dateiendung `.mv.db` / `.h2.db`.
+
+Typisch im **Jameica-Workdir** (nicht im Programmordner):
+
+| OS | Übliche Lage |
+|----|----------------|
+| Windows | `%USERPROFILE%\.jameica\openjverein\h2db\openjverein` |
+| Linux | `~/.jameica/openjverein/h2db/openjverein` |
+| macOS | `~/.jameica/…` oder `~/Library/jameica/…` |
+
+Ältere Installationen: `…\.jameica\jverein\h2db\jverein`. Wenn die Datei `openjverein.mv.db` heißt, ist `H2_DB_PATH=…\h2db\openjverein` (Suffix weglassen). Anderes Workdir (`jameica -f …`): dort unter `openjverein\h2db\` bzw. `jverein\h2db\` suchen.
+
+---
+
+## Schritt 1 — Hello-World (Hang-Beweis, zuerst)
+
+Alte Hook-Versionen mit `MessageConsumer` / `Java.extend` **hängen den Start**. Zuerst beweisen, dass Scripting ohne Hang läuft:
+
+1. Falls Jameica noch hängt: **Recovery** (unten) — Sync-`.js` aus der Config entfernen.
+2. Jameica **normal** starten (nicht über `launcher/`).
+3. **Datei → Einstellungen → Scripting → Script hinzufügen…** → `scripts/hello-world.js` → Speichern.
+4. Jameica **neu starten**.
+
+### Was du sehen solltest
+
+| Check | Erwartung |
+|-------|-----------|
+| UI | Jameica kommt hoch, kein Freeze |
+| Log | Zeile `[ojv-hello] loaded …` |
+| Marker Load | `%TEMP%\ojv-hello-world-loaded.txt` bzw. `$TMPDIR/ojv-hello-world-loaded.txt` |
+| Nach **Datei → Beenden** | Marker `…/ojv-hello-world-shutdown.txt` + Log `shutdown hook fired` |
+
+Wenn der Start mit Hello-World hängt: in der Datei `STAGE_SHUTDOWN_HOOK = false` setzen und erneut testen. Wenn dann OK → Hook-Registrierung problematisch; Issue öffnen. Wenn schon ohne Hook hängt → `STAGE_LOGGER` / `STAGE_MARKER_FILE` abschalten bzw. `minimal.js` testen.
+
+---
+
+## Schritt 2 — Sync-Script registrieren
+
+Nur wenn Hello-World **Start + Shutdown-Marker** ok waren:
+
+1. Hello-World aus Scripting entfernen (oder deaktiviert lassen).
+2. **SYNC_ROOT** oben in `scripts/jameica-openjverein-sync.js` setzen (Platzhalter `C:\\path\\to\\…` ersetzen; **keinen** persönlichen Default committen) — sonst `root-fail` / `spawn-fail`, kein Webhook. Optional `OPENJVEREIN_N8N_SYNC_ROOT` nur wenn für den **Jameica-Prozess** gesetzt (nicht Shell-`.env`). Fallback über registrierten Script-Pfad, falls Scripting ihn liefert. Root muss `scripts/export-trigger.(cmd|sh)` und `.env` enthalten.
+3. In `.env`: echte `N8N_WEBHOOK_URL` (kein `N8N_HOST_PLACEHOLDER`), plus `H2_DB_PATH` / `H2_JDBC_JAR`. `N8N_WEBHOOK_SECRET` nur wenn n8n ein Secret prüft — bei Auth=None leer lassen oder weglassen.
+4. Scripting → `scripts/jameica-openjverein-sync.js` hinzufügen → Speichern → Jameica neu starten.
+5. Sauber beenden (**Datei → Beenden**, kein Kill) → Marker + `logs/export-*.log` + `output/einwilligungen.*` + n8n prüfen.
+
+### Manueller Fallback / Test
 
 ```bash
-./wrapper/jameica-wrapper.sh
-# optional Argumente an Jameica durchreichen:
-./wrapper/jameica-wrapper.sh --irgendwas
-```
-
-**Windows:**
-
-```cmd
-wrapper\jameica-wrapper.cmd
-```
-
-oder:
-
-```powershell
-.\wrapper\jameica-wrapper.ps1
-```
-
-Ablauf:
-
-| Zeitpunkt | Aktion |
-|-----------|--------|
-| Vor Start (`FLUSH_OUTBOX_ON_START=1`) | Nur Outbox → n8n (H2 oft noch gesperrt) |
-| Nach Exit | Full-Export aus H2 + Outbox-Retry + POST |
-
-Exporter manuell (z. B. Test nach Exit, wenn Jameica bereits zu ist):
-
-```bash
+./scripts/export-trigger.sh exit
+# Windows: scripts\export-trigger.cmd exit
 python exporter/export.py --trigger jameica_exit
-python exporter/export.py --flush-only   # nur Outbox
 ```
+
+---
+
+## Diagnose: Warum kein Webhook? Wohin schauen?
+
+Typische Ursachen (oft kombiniert):
+
+| Ursache | Wirkung |
+|---------|---------|
+| `SYNC_ROOT` leer/Platzhalter; ENV nur in Shell-`.env` | Hook ok, aber `root-fail` / `spawn-fail` — **kein** Exporter. ENV nur für **Jameica-Prozess** |
+| `ENABLE_START_OUTBOX_FLUSH = false` (Default) | **Kein** Start-Webhook — Absicht; Export nur nach Beenden |
+| Nur Fenster schließen / Kill statt **Datei → Beenden** | JVM-Hook kann ausbleiben |
+| `.env` fehlt / `N8N_WEBHOOK_URL` fehlt oder Platzhalter | `exporter-fail` mit `reason=missing_env_file` bzw. `reason=missing_webhook` |
+| `python` nicht auf PATH und keine `.venv` | `exporter-fail` `reason=python_not_found` — venv anlegen oder `PYTHON=` setzen |
+| `jaydebeapi` fehlt (System-Python ohne Deps) | `exporter-fail` `reason=h2_connect` Detail `jaydebeapi fehlt` — `.venv` + `pip install -r exporter/requirements.txt` (Trigger nutzt `.venv` automatisch) |
+| `H2_JDBC_JAR` fehlt / falscher Pfad / in `.env` mit `"…"` gequotet | `exporter-fail` `reason=h2_jar_missing` — JAR unter Plugins/`lib\h2\` suchen; **keine** doppelten Quotes (Escape `\t`/`\2`); `H2_JDBC_JAR=E:/path/to/h2-1.4.x.jar` |
+| H2 **90048** / Format-Mismatch (2.x-JAR vs Format-1-DB) | `exporter-fail` `reason=h2_format_mismatch` — Detail enthält `90048` / `Unsupported database file version` / `read format 1` … `format 3`. **`h2-1.4.*.jar` setzen** (gleiche Major wie OpenJVerein), nicht `h2-2…` |
+| `H2_DB_PATH` falsch | `exporter-fail` `reason=h2_path` — typisch `%USERPROFILE%\.jameica\openjverein\h2db\openjverein` ohne `.mv.db` |
+| H2 noch gelockt (Jameica nicht weg) | `exporter-fail` `reason=jdbc_lock` — Settle erhöhen / sauber beenden |
+| H2-Connect hängt / Timeout | `exporter-progress` bleibt bei `h2_connect` → danach `reason=h2_connect_timeout` (oder `watchdog`) |
+| Keine JRE für jaydebeapi/JPype | `exporter-fail` `reason=jvm_missing` — JRE + `JAVA_HOME` für denselben User wie der detached Trigger |
+| Webhook-HTTP-Fehler / Timeout | `exporter-http` (+ Host) + `exporter-fail` `reason=webhook_http` / `webhook_timeout` + Outbox |
+| HTTP **403** hinter Cloudflare (`error code: 1010`) | Bot-Schutz blockiert Default-`User-Agent` von `Python-urllib` — Exporter setzt eigenen UA; Workflow muss **Active** sein und URL `/webhook/…` (nicht nur `/webhook-test/`) |
+| Exporter startet, kein fail/http | `exporter-progress.txt` (`stage=…`) + `logs/export-jameica_exit.log` hochladen |
+| Alter Hang-Hook noch registriert | Start freeze — Recovery unten |
+| Truthiness/`var e = events` auf globalem `events` | `eval-fail.txt`: `Invalid JavaScript value of type …ScriptingService$Events` — Sync-Script nutzt `events` **nicht** |
+
+`SYSTEM_SHUTDOWN` geht **nicht** an `events.*`. MessageConsumer/`Java.extend` hängt beim Eval — deshalb **Runtime-Shutdown-Hook**. Bei **Datei → Beenden** ruft Jameica `System.exit` auf → Hooks laufen. Der Jameica-Logger ist zu dem Zeitpunkt oft schon geschlossen; deshalb zählen die **Marker-Dateien**.
+
+### Marker-Ort (nach Start und nach Beenden prüfen)
+
+Windows: `%TEMP%\ojv-n8n-sync-*.txt`  
+Linux/macOS: `$TMPDIR/ojv-n8n-sync-*.txt` (sonst `/tmp/…`)  
+Zusätzlich, wenn `SYNC_ROOT` ok: `<Repo>/logs/ojv-n8n-sync-*.txt` und `logs/export-trigger-spawn.log`
+
+| Datei | Bedeutung |
+|-------|-----------|
+| `ojv-n8n-sync-eval.txt` | Script wurde evaluiert (Load ok) |
+| `ojv-n8n-sync-eval-fail.txt` | Bootstrap abgebrochen (früher: Events-Truthiness) |
+| `ojv-n8n-sync-root-ok.txt` / `root-fail.txt` | Repo-Pfad gesetzt bzw. fehlt |
+| `ojv-n8n-sync-hook-registered.txt` | Shutdown-Hook hängt an der JVM |
+| `ojv-n8n-sync-start-skipped.txt` | Start-Outbox absichtlich aus |
+| `ojv-n8n-sync-shutdown-hook-fired.txt` | **Datei → Beenden** hat den Hook ausgelöst |
+| `ojv-n8n-sync-spawn-exit.txt` | `export-trigger exit` detached gestartet |
+| `ojv-n8n-sync-trigger-spawned.txt` | Trigger-Prozess läuft |
+| `ojv-n8n-sync-exporter-start.txt` | Python-Exporter gestartet |
+| `ojv-n8n-sync-h2-jdbc-jar.txt` | Aufgelöster H2-JAR-Pfad + `source=env` (`.env`) bzw. `discovery` / `missing` — jeder Lauf |
+| `ojv-n8n-sync-exporter-progress.txt` | Letzte Stufe (`stage=load_config` / `h2_jdbc_jar` / `h2_connect` / `http_post` / …) — Hang-Ort |
+| `ojv-n8n-sync-exporter-http.txt` | Webhook POST start/OK/FAIL inkl. **Host** (keine Secrets) |
+| `ojv-n8n-sync-exporter-success.txt` | Export + Webhook OK |
+| `ojv-n8n-sync-spawn-fail.txt` / `exporter-fail.txt` | Pfad/Spawn/H2/Webhook — immer `reason=… rc=<Zahl>` (nie leeres `rc=`) |
+| `logs/export-jameica_exit.log` | Unbuffered stdout/stderr + Traceback des letzten Exit-Exports |
+| `logs/export-trigger-spawn.log` | Spawn-Diagnose aus dem Jameica-Hook (falls geschrieben) |
+
+**Nach dem nächsten sauberen Beenden** mindestens erwarten: `eval` → `hook-registered` → `shutdown-hook-fired` → `spawn-exit` → `trigger-spawned` → `exporter-start` → `exporter-progress` (`stage=…`) → `exporter-http` / `exporter-success` (oder `exporter-fail`). Bei Hang nach `exporter-start`: `exporter-progress.txt` + **Inhalt** von `logs/export-jameica_exit.log` und `logs/export-trigger-spawn.log` aus `SYNC_ROOT` in den Chat hochladen (Pfad allein reicht nicht). Fehlt `shutdown-hook-fired`, hat der Quit-Pfad den Hook nicht erreicht. Fehlt schon `root-ok`, zuerst SYNC_ROOT in der `.js` setzen.
+
+Optional in Jameica-Log (solange Logger noch offen): Zeilen mit `[openjverein-n8n-sync]`.
+
+---
+
+## Hang-Ursache (kurz)
+
+`ScriptingService` evaluiert registrierte `.js` **synchron** nach `SYSTEM_STARTED`.  
+Unser früherer Hook registrierte einen **`MessageConsumer` via `Java.extend` / `JavaAdapter`** im Eval-Pfad → Start freeze. Leere `.js` startete; Hook-Code nicht.
+
+Zusätzlich: globales `events` (`ScriptingService$Events`) darf in Rhino **nicht** als JS-Wert behandelt werden (`if (events)`, `var e = events`, Wrap/Return) — das wirft `InternalError: Invalid JavaScript value of type …Events`. Hibiscus ruft nur `events.add(…)` direkt auf; der Sync-Pfad verzichtet ganz auf `events` und nutzt nur den JVM-Hook.
+
+**Arbeitendes Muster:** Eval nur Marker + deferred Daemon-Thread; Shutdown über **`Runtime.addShutdownHook`**; Export nur **`ProcessBuilder.start()` ohne waitFor**.  
+`SYSTEM_SHUTDOWN` wird von Jameica **nicht** auf `events.*` gemappt — deshalb Hook statt Event-API.
+
+Optional später: winziges Java-Plugin, das bei `SYSTEM_SHUTDOWN` `QueryMessage("function.…")` an Queue `jameica.scripting` schickt (InvokeScriptMessageConsumer) — JS bleibt ohne Consumer.
+
+### Recovery (alte hängende Registrierung)
+
+1. Jameica / hängende Kinder beenden.
+2. Workdir: Windows `%USERPROFILE%\.jameica\`, Linux `~/.jameica/`, macOS oft `~/Library/jameica/`.
+3. In `cfg/de.willuhn.jameica.services.ScriptingService.properties` Zeilen `scripts.N=…` mit altem Sync-/Hook-Pfad entfernen **oder** die `.js` umbenennen (`.bak`).
+4. Neu starten → zuerst `hello-world.js`.
+
+---
 
 ## n8n-Workflow importieren
 
@@ -137,7 +286,7 @@ Exporter-Body (Referenz):
 }
 ```
 
-### Drive-Layout (Pfadname noch offen)
+## Drive-Layout
 
 ```text
 …/<DRIVE-ORDNER-NOCH-OFFEN>/
@@ -154,18 +303,14 @@ Exporter-Body (Referenz):
 
 Arbeitsdatei für Medien: **`aktuell/einwilligungen.csv`**.
 
-## Secrets
+## Was nicht (MVP)
 
-| Secret | Wo |
-|--------|-----|
-| Webhook-URL / Secret | lokal `.env` + n8n — in Git nur Platzhalter |
-| Google Drive OAuth | **nur** in n8n |
-| H2-Zugang | lokal am Exporter |
+| Thema | Status |
+|-------|--------|
+| Cron / Task Scheduler | **nein** |
+| Launcher/Wrapper als Primärstart | **cancelled** — Jameica normal starten |
+| Ordner-Watcher | nein |
+| `MessageConsumer` in JS | **nicht** — hängt beim Eval |
+| Kommentar-only `.js` als Endzustand | **nein** — Hello-World + Sync-Hook |
 
-Dieses Repo ist **publishbar**: keine echten Hosts, Tokens oder DB-Pfade.
-
-## Hinweise
-
-- Primärpfad ist **nach Exit** (H2 freigegeben). Parallel-JDBC bei laufendem Jameica wird vermieden.
-- Filter „≥1 Einwilligung“ sitzt im Exporter; n8n wiederholt ihn als Sicherheitsnetz.
-- Kein täglicher Zeitplan: Sync und Outbox-Retry nur über den Wrapper bei Start/Exit.
+`launcher/` bleibt nur als Notfall-Experiment im Tree; **nicht** der unterstützte Pfad.
