@@ -806,11 +806,14 @@ def post_webhook(cfg: dict[str, Any], payload: dict[str, Any], trigger: str = "m
         f"webhook POST start trigger={trigger} host={host} timeout_s={timeout_s:.0f}",
     )
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    # Cloudflare (and similar) often block Python-urllib's default UA (CF 1010 → HTTP 403).
     headers = {
         "Content-Type": "application/json; charset=utf-8",
+        "User-Agent": "openjverein-n8n-sync/1.0 (+https://github.com/mbmueller/openjverein-n8n-sync)",
+        "Accept": "application/json, */*",
     }
     # Optional: only send header when a real secret is configured (n8n Auth=None → leave empty)
-    secret = (cfg.get("webhook_secret") or "").strip()
+    secret = (cfg.get("webhook_secret") or "").strip().strip('"').strip("'")
     if secret and secret != "CHANGE_ME_WEBHOOK_SECRET":
         headers["X-Webhook-Secret"] = secret
     req = Request(url, data=body, headers=headers, method="POST")
@@ -983,7 +986,8 @@ def run(
         write_json(json_path, payload)
         write_csv(csv_path, payload["members"])
         member_count = len(payload["members"])
-        print(f"Export: {member_count} Mitglieder → {json_path} , {csv_path}", flush=True)
+        # ASCII arrow: Windows cp1252 consoles raise UnicodeEncodeError on U+2192.
+        print(f"Export: {member_count} Mitglieder -> {json_path} , {csv_path}", flush=True)
         append_export_log(trigger, f"exported members={member_count}")
 
         host = webhook_host(cfg.get("webhook_url"))
@@ -1013,7 +1017,7 @@ def run(
             )
             progress(trigger, "http_fail", f"host={host} err={err_kind}")
             print(
-                f"Webhook fehlgeschlagen ({e}) → Outbox {path}",
+                f"Webhook fehlgeschlagen ({e}) -> Outbox {path}",
                 file=sys.stderr,
                 flush=True,
             )

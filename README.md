@@ -177,6 +177,7 @@ Typische Ursachen (oft kombiniert):
 | H2-Connect hängt / Timeout | `exporter-progress` bleibt bei `h2_connect` → danach `reason=h2_connect_timeout` (oder `watchdog`) |
 | Keine JRE für jaydebeapi/JPype | `exporter-fail` `reason=jvm_missing` — JRE + `JAVA_HOME` für denselben User wie der detached Trigger |
 | Webhook-HTTP-Fehler / Timeout | `exporter-http` (+ Host) + `exporter-fail` `reason=webhook_http` / `webhook_timeout` + Outbox |
+| HTTP **403** hinter Cloudflare (`error code: 1010`) | Bot-Schutz blockiert Default-`User-Agent` von `Python-urllib` — Exporter setzt eigenen UA; Workflow muss **Active** sein und URL `/webhook/…` (nicht nur `/webhook-test/`) |
 | Exporter startet, kein fail/http | `exporter-progress.txt` (`stage=…`) + `logs/export-jameica_exit.log` hochladen |
 | Alter Hang-Hook noch registriert | Start freeze — Recovery unten |
 | Truthiness/`var e = events` auf globalem `events` | `eval-fail.txt`: `Invalid JavaScript value of type …ScriptingService$Events` — Sync-Script nutzt `events` **nicht** |
