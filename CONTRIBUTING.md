@@ -67,7 +67,7 @@ python exporter/export.py --trigger jameica_exit
 
 **Launcher:** nicht Primärpfad (cancelled). Nur Notfall/Experiment — siehe `launcher/README.md`.
 
-n8n-Workflow: `n8n/einwilligung-bildnutzung.json` importieren, Drive-Credential und Ordner-IDs **nur in der n8n-UI** setzen, Webhook-Secret an lokale `.env` anbinden.
+n8n-Workflow: `n8n/einwilligung-bildnutzung.json` importieren (Auth **None** + Drive-Upload über Binary `data`), Drive-Credential und Ordner-ID-Platzhalter **nur in der n8n-UI** setzen. `N8N_WEBHOOK_SECRET` lokal leer lassen, wenn Auth=None.
 
 ## Fragen?
 
