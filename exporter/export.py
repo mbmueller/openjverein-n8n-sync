@@ -685,8 +685,10 @@ def connect_h2(cfg: dict[str, Any], trigger: str = "manual"):
     progress(
         trigger,
         "h2_connect",
-        f"timeout_s={connect_secs:.0f} lock_timeout_ms={lock_ms} jar_ok=1",
+        f"timeout_s={connect_secs:.0f} lock_timeout_ms={lock_ms} "
+        f"jar={jar_path.name} path={jar_path}",
     )
+    append_export_log(trigger, f"h2_connect using jar={jar_path}")
 
     def _do_connect():
         return jaydebeapi.connect(
@@ -705,10 +707,12 @@ def connect_h2(cfg: dict[str, Any], trigger: str = "manual"):
         msg = f"{type(e).__name__}: {e}".lower()
         if "jpype" in msg or "jvm" in msg or "java" in msg and "not found" in msg:
             raise RuntimeError(
-                f"JVM/jaydebeapi start failed: {type(e).__name__}: {e}. "
+                f"JVM/jaydebeapi start failed jar={jar_path}: "
+                f"{type(e).__name__}: {e}. "
                 "Install a JRE and ensure JAVA_HOME (or java on PATH) for the "
                 "same user that runs the Jameica detached export-trigger."
             ) from e
+        # Keep original exception type for classify_h2_error; jar path is in progress/fail.
         raise
 
 
@@ -904,7 +908,8 @@ def run(
     try:
         progress(trigger, "load_config")
         cfg, resolved_env = load_config(env_file)
-        jar_name = Path(str(cfg["h2_jdbc_jar"])).name if cfg.get("h2_jdbc_jar") else "-"
+        jar_cfg = str(cfg["h2_jdbc_jar"]) if cfg.get("h2_jdbc_jar") else ""
+        jar_name = Path(jar_cfg).name if jar_cfg else "-"
         jar_source = cfg.get("h2_jdbc_jar_source") or "missing"
         progress(
             trigger,
@@ -912,7 +917,7 @@ def run(
             f"env={'1' if resolved_env else '0'} "
             f"jar_source={jar_source} "
             f"jar_resolved={'1' if cfg.get('h2_jdbc_jar_resolved') else '0'} "
-            f"jar={jar_name} "
+            f"jar={jar_name} path={jar_cfg or '-'} "
             f"webhook_host={webhook_host(cfg.get('webhook_url'))}",
         )
         cfg["output_dir"].mkdir(parents=True, exist_ok=True)
@@ -961,10 +966,12 @@ def run(
             payload = export_from_h2(cfg, trigger)
         except Exception as e:  # noqa: BLE001
             reason = classify_h2_error(e)
+            jar_for_fail = cfg.get("h2_jdbc_jar") or env("H2_JDBC_JAR") or "-"
+            # jar= first — fail() truncates detail at 500 chars
             rc = fail(
                 trigger,
                 reason,
-                f"{type(e).__name__}: {e}",
+                f"jar={jar_for_fail} {type(e).__name__}: {e}",
                 rc=2,
                 exc=e,
             )
