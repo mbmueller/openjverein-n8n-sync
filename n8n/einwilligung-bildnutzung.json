@@ -13,7 +13,7 @@
       "name": "Webhook",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
-      "position": [200, 300],
+      "position": [160, 300],
       "webhookId": "einwilligung-bildnutzung-placeholder"
     },
     {
@@ -31,7 +31,7 @@
       "name": "Secret prüfen",
       "type": "n8n-nodes-base.if",
       "typeVersion": 1,
-      "position": [420, 300],
+      "position": [360, 300],
       "notes": "Auth=None / leeres Secret: Durchlass. Nur wenn N8N_WEBHOOK_SECRET gesetzt und ≠ Platzhalter, muss Header X-Webhook-Secret passen."
     },
     {
@@ -46,25 +46,36 @@
       "name": "401 Unauthorized",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1,
-      "position": [640, 480]
+      "position": [560, 500]
     },
     {
       "parameters": {
-        "jsCode": "const raw = items[0].json;\nconst body = raw.body && typeof raw.body === 'object' ? raw.body : raw;\n\nif (!body || typeof body !== 'object') {\n  throw new Error('Payload fehlt');\n}\nif (!Array.isArray(body.members)) {\n  throw new Error('members muss ein Array sein');\n}\nif (!Array.isArray(body.fields)) {\n  throw new Error('fields muss ein Array sein');\n}\n\nconst requiredFields = ['insta', 'website', 'flyer'];\nfor (const f of requiredFields) {\n  if (!body.fields.includes(f)) {\n    throw new Error(`Feld ${f} fehlt in fields`);\n  }\n}\n\nconst asBool = (v) => {\n  if (v === true || v === 1) return true;\n  if (v === false || v === 0 || v == null) return false;\n  const s = String(v).trim().toLowerCase();\n  if (['ja', 'true', '1', 'yes'].includes(s)) return true;\n  if (['nein', 'false', '0', 'no', ''].includes(s)) return false;\n  return Boolean(v);\n};\n\n// Sicherheitsnetz: ≥1 Einwilligung (Exporter filtert bereits aktiv + ≥1)\nconst members = body.members\n  .filter((m) => m && typeof m === 'object')\n  .map((m) => ({\n    id: m.id,\n    mitgliedsnummer: m.mitgliedsnummer ?? '',\n    name: m.name ?? '',\n    vorname: m.vorname ?? '',\n    insta: asBool(m.insta),\n    website: asBool(m.website),\n    flyer: asBool(m.flyer),\n  }))\n  .filter((m) => m.insta || m.website || m.flyer);\n\nconst exportedAt = body.exported_at || new Date().toISOString();\nconst day = String(exportedAt).slice(0, 10);\n\nconst payload = {\n  exported_at: exportedAt,\n  source: body.source || 'openjverein',\n  trigger: body.trigger || 'unknown',\n  fields: body.fields,\n  members,\n};\n\nconst csvHeader = 'id,mitgliedsnummer,name,vorname,insta,website,flyer\\n';\nconst esc = (s) => `\"${String(s ?? '').replace(/\"/g, '\"\"')}\"`;\nconst yn = (v) => (v ? 'Ja' : 'Nein');\nconst csvRows = members\n  .map((m) =>\n    [m.id, esc(m.mitgliedsnummer), esc(m.name), esc(m.vorname), yn(m.insta), yn(m.website), yn(m.flyer)].join(','),\n  )\n  .join('\\n');\n\nconst meta = {\n  last_sync_at: exportedAt,\n  source: payload.source,\n  trigger: payload.trigger,\n  member_count: members.length,\n};\n\nreturn [{\n  json: {\n    payload,\n    meta,\n    archiveDay: day,\n    jsonName: 'einwilligungen.json',\n    csvName: 'einwilligungen.csv',\n    metaName: 'last-sync.json',\n    jsonContent: JSON.stringify(payload, null, 2),\n    csvContent: csvHeader + csvRows + (csvRows ? '\\n' : ''),\n    metaContent: JSON.stringify(meta, null, 2),\n  },\n}];"
+        "jsCode": "const raw = items[0].json;\nconst body = raw.body && typeof raw.body === 'object' ? raw.body : raw;\n\nif (!body || typeof body !== 'object') {\n  throw new Error('Payload fehlt');\n}\nif (!Array.isArray(body.members)) {\n  throw new Error('members muss ein Array sein');\n}\nif (!Array.isArray(body.fields)) {\n  throw new Error('fields muss ein Array sein');\n}\n\nconst requiredFields = ['insta', 'website', 'flyer'];\nfor (const f of requiredFields) {\n  if (!body.fields.includes(f)) {\n    throw new Error(`Feld ${f} fehlt in fields`);\n  }\n}\n\nconst asBool = (v) => {\n  if (v === true || v === 1) return true;\n  if (v === false || v === 0 || v == null) return false;\n  const s = String(v).trim().toLowerCase();\n  if (['ja', 'true', '1', 'yes'].includes(s)) return true;\n  if (['nein', 'false', '0', 'no', ''].includes(s)) return false;\n  return Boolean(v);\n};\n\nconst members = body.members\n  .filter((m) => m && typeof m === 'object')\n  .map((m) => ({\n    id: m.id,\n    mitgliedsnummer: m.mitgliedsnummer ?? '',\n    name: m.name ?? '',\n    vorname: m.vorname ?? '',\n    insta: asBool(m.insta),\n    website: asBool(m.website),\n    flyer: asBool(m.flyer),\n  }))\n  .filter((m) => m.insta || m.website || m.flyer);\n\nconst exportedAt = body.exported_at || new Date().toISOString();\nconst day = String(exportedAt).slice(0, 10);\n\nconst payload = {\n  exported_at: exportedAt,\n  source: body.source || 'openjverein',\n  trigger: body.trigger || 'unknown',\n  fields: body.fields,\n  members,\n};\n\nconst csvHeader = 'id,mitgliedsnummer,name,vorname,insta,website,flyer\\n';\nconst esc = (s) => `\"${String(s ?? '').replace(/\"/g, '\"\"')}\"`;\nconst yn = (v) => (v ? 'Ja' : 'Nein');\nconst csvRows = members\n  .map((m) =>\n    [m.id, esc(m.mitgliedsnummer), esc(m.name), esc(m.vorname), yn(m.insta), yn(m.website), yn(m.flyer)].join(','),\n  )\n  .join('\\n');\n\nconst meta = {\n  last_sync_at: exportedAt,\n  source: payload.source,\n  trigger: payload.trigger,\n  member_count: members.length,\n};\n\nconst jsonName = 'einwilligungen.json';\nconst csvName = 'einwilligungen.csv';\nconst metaName = 'last-sync.json';\nconst jsonContent = JSON.stringify(payload, null, 2);\nconst csvContent = csvHeader + csvRows + (csvRows ? '\\n' : '');\nconst metaContent = JSON.stringify(meta, null, 2);\n\n// Binary for Google Drive Upload (inputDataFieldName = data / jsonFile / …)\nconst jsonFile = await this.helpers.prepareBinaryData(\n  Buffer.from(jsonContent, 'utf8'),\n  jsonName,\n  'application/json',\n);\nconst csvFile = await this.helpers.prepareBinaryData(\n  Buffer.from(csvContent, 'utf8'),\n  csvName,\n  'text/csv',\n);\nconst metaFile = await this.helpers.prepareBinaryData(\n  Buffer.from(metaContent, 'utf8'),\n  metaName,\n  'application/json',\n);\n\nreturn [{\n  json: {\n    payload,\n    meta,\n    archiveDay: day,\n    jsonName,\n    csvName,\n    metaName,\n    jsonContent,\n    csvContent,\n    metaContent,\n  },\n  binary: {\n    jsonFile,\n    csvFile,\n    metaFile,\n  },\n}];"
       },
       "id": "code-validate-001",
       "name": "Validieren + CSV",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [640, 200]
+      "position": [560, 200],
+      "notes": "Baut Exporter-Payload-Shape und Binary-Felder jsonFile/csvFile/metaFile für Drive Upload."
+    },
+    {
+      "parameters": {
+        "jsCode": "const src = $('Validieren + CSV').first();\nif (!src.binary || !src.binary.jsonFile) {\n  throw new Error('Binary jsonFile fehlt — Validieren + CSV prüfen');\n}\nreturn [{\n  json: {\n    fileName: src.json.jsonName,\n    archiveDay: src.json.archiveDay,\n    member_count: src.json.payload.members.length,\n    exported_at: src.json.payload.exported_at,\n  },\n  binary: { data: src.binary.jsonFile },\n}];"
+      },
+      "id": "code-bin-aktuell-json-001",
+      "name": "Binär aktuell JSON",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [760, 200]
     },
     {
       "parameters": {
         "authentication": "oAuth2",
         "resource": "file",
-        "operation": "createFromText",
-        "content": "={{ $json.jsonContent }}",
-        "name": "={{ $json.jsonName }}",
+        "operation": "upload",
+        "inputDataFieldName": "data",
+        "name": "={{ $json.fileName }}",
         "driveId": {
           "__rl": true,
           "mode": "list",
@@ -75,28 +86,40 @@
           "mode": "id",
           "value": "DRIVE_FOLDER_ID_AKTUELL_PLACEHOLDER"
         },
-        "options": {}
+        "options": {
+          "simplifyOutput": true
+        }
       },
       "id": "drive-aktuell-json-001",
       "name": "Drive aktuell JSON",
       "type": "n8n-nodes-base.googleDrive",
       "typeVersion": 3,
-      "position": [880, 200],
+      "position": [960, 200],
       "credentials": {
         "googleDriveOAuth2Api": {
           "id": "CREDENTIAL_ID_GOOGLE_DRIVE_PLACEHOLDER",
           "name": "Google Drive (Platzhalter)"
         }
       },
-      "notes": "createFromText legt ggf. eine neue Datei gleichen Namens an. Nach erstem Sync Duplikate in aktuell/ bereinigen oder später per Datei-ID updaten."
+      "notes": "Upload erwartet Binary-Feld data (von Binär aktuell JSON). Operation muss Upload sein, nicht Create From Text."
+    },
+    {
+      "parameters": {
+        "jsCode": "const src = $('Validieren + CSV').first();\nif (!src.binary || !src.binary.csvFile) {\n  throw new Error('Binary csvFile fehlt — Validieren + CSV prüfen');\n}\nreturn [{\n  json: {\n    fileName: src.json.csvName,\n    archiveDay: src.json.archiveDay,\n    member_count: src.json.payload.members.length,\n    exported_at: src.json.payload.exported_at,\n  },\n  binary: { data: src.binary.csvFile },\n}];"
+      },
+      "id": "code-bin-aktuell-csv-001",
+      "name": "Binär aktuell CSV",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1160, 200]
     },
     {
       "parameters": {
         "authentication": "oAuth2",
         "resource": "file",
-        "operation": "createFromText",
-        "content": "={{ $('Validieren + CSV').item.json.csvContent }}",
-        "name": "={{ $('Validieren + CSV').item.json.csvName }}",
+        "operation": "upload",
+        "inputDataFieldName": "data",
+        "name": "={{ $json.fileName }}",
         "driveId": {
           "__rl": true,
           "mode": "list",
@@ -107,13 +130,15 @@
           "mode": "id",
           "value": "DRIVE_FOLDER_ID_AKTUELL_PLACEHOLDER"
         },
-        "options": {}
+        "options": {
+          "simplifyOutput": true
+        }
       },
       "id": "drive-aktuell-csv-001",
       "name": "Drive aktuell CSV",
       "type": "n8n-nodes-base.googleDrive",
       "typeVersion": 3,
-      "position": [1100, 200],
+      "position": [1360, 200],
       "credentials": {
         "googleDriveOAuth2Api": {
           "id": "CREDENTIAL_ID_GOOGLE_DRIVE_PLACEHOLDER",
@@ -145,22 +170,32 @@
       "name": "Drive Archiv Ordner Tag",
       "type": "n8n-nodes-base.googleDrive",
       "typeVersion": 3,
-      "position": [1320, 200],
+      "position": [1560, 200],
       "credentials": {
         "googleDriveOAuth2Api": {
           "id": "CREDENTIAL_ID_GOOGLE_DRIVE_PLACEHOLDER",
           "name": "Google Drive (Platzhalter)"
         }
       },
-      "notes": "Erzeugt archiv/YYYY-MM-DD/ unter DRIVE_FOLDER_ID_ARCHIV_PLACEHOLDER. Gleicher Tag → ggf. zweiter Ordner gleichen Namens."
+      "notes": "Erzeugt archiv/YYYY-MM-DD/ unter DRIVE_FOLDER_ID_ARCHIV_PLACEHOLDER."
+    },
+    {
+      "parameters": {
+        "jsCode": "const src = $('Validieren + CSV').first();\nconst folderId = items[0].json.id;\nif (!folderId) {\n  throw new Error('Archiv-Ordner-ID fehlt');\n}\nif (!src.binary || !src.binary.jsonFile) {\n  throw new Error('Binary jsonFile fehlt');\n}\nreturn [{\n  json: {\n    fileName: src.json.jsonName,\n    archiveFolderId: folderId,\n    archiveDay: src.json.archiveDay,\n    member_count: src.json.payload.members.length,\n    exported_at: src.json.payload.exported_at,\n  },\n  binary: { data: src.binary.jsonFile },\n}];"
+      },
+      "id": "code-bin-archiv-json-001",
+      "name": "Binär Archiv JSON",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1760, 120]
     },
     {
       "parameters": {
         "authentication": "oAuth2",
         "resource": "file",
-        "operation": "createFromText",
-        "content": "={{ $('Validieren + CSV').item.json.jsonContent }}",
-        "name": "={{ $('Validieren + CSV').item.json.jsonName }}",
+        "operation": "upload",
+        "inputDataFieldName": "data",
+        "name": "={{ $json.fileName }}",
         "driveId": {
           "__rl": true,
           "mode": "list",
@@ -169,15 +204,17 @@
         "folderId": {
           "__rl": true,
           "mode": "id",
-          "value": "={{ $json.id }}"
+          "value": "={{ $json.archiveFolderId }}"
         },
-        "options": {}
+        "options": {
+          "simplifyOutput": true
+        }
       },
       "id": "drive-archiv-json-001",
       "name": "Drive Archiv JSON",
       "type": "n8n-nodes-base.googleDrive",
       "typeVersion": 3,
-      "position": [1540, 120],
+      "position": [1960, 120],
       "credentials": {
         "googleDriveOAuth2Api": {
           "id": "CREDENTIAL_ID_GOOGLE_DRIVE_PLACEHOLDER",
@@ -187,11 +224,21 @@
     },
     {
       "parameters": {
+        "jsCode": "const src = $('Validieren + CSV').first();\nconst folderId = $('Drive Archiv Ordner Tag').first().json.id;\nif (!folderId) {\n  throw new Error('Archiv-Ordner-ID fehlt');\n}\nif (!src.binary || !src.binary.csvFile) {\n  throw new Error('Binary csvFile fehlt');\n}\nreturn [{\n  json: {\n    fileName: src.json.csvName,\n    archiveFolderId: folderId,\n    archiveDay: src.json.archiveDay,\n    member_count: src.json.payload.members.length,\n    exported_at: src.json.payload.exported_at,\n  },\n  binary: { data: src.binary.csvFile },\n}];"
+      },
+      "id": "code-bin-archiv-csv-001",
+      "name": "Binär Archiv CSV",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1760, 280]
+    },
+    {
+      "parameters": {
         "authentication": "oAuth2",
         "resource": "file",
-        "operation": "createFromText",
-        "content": "={{ $('Validieren + CSV').item.json.csvContent }}",
-        "name": "={{ $('Validieren + CSV').item.json.csvName }}",
+        "operation": "upload",
+        "inputDataFieldName": "data",
+        "name": "={{ $json.fileName }}",
         "driveId": {
           "__rl": true,
           "mode": "list",
@@ -200,15 +247,17 @@
         "folderId": {
           "__rl": true,
           "mode": "id",
-          "value": "={{ $('Drive Archiv Ordner Tag').item.json.id }}"
+          "value": "={{ $json.archiveFolderId }}"
         },
-        "options": {}
+        "options": {
+          "simplifyOutput": true
+        }
       },
       "id": "drive-archiv-csv-001",
       "name": "Drive Archiv CSV",
       "type": "n8n-nodes-base.googleDrive",
       "typeVersion": 3,
-      "position": [1540, 280],
+      "position": [1960, 280],
       "credentials": {
         "googleDriveOAuth2Api": {
           "id": "CREDENTIAL_ID_GOOGLE_DRIVE_PLACEHOLDER",
@@ -218,11 +267,21 @@
     },
     {
       "parameters": {
+        "jsCode": "const src = $('Validieren + CSV').first();\nif (!src.binary || !src.binary.metaFile) {\n  throw new Error('Binary metaFile fehlt');\n}\nreturn [{\n  json: {\n    fileName: src.json.metaName,\n    archiveDay: src.json.archiveDay,\n    member_count: src.json.payload.members.length,\n    exported_at: src.json.payload.exported_at,\n  },\n  binary: { data: src.binary.metaFile },\n}];"
+      },
+      "id": "code-bin-meta-001",
+      "name": "Binär meta",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2160, 200]
+    },
+    {
+      "parameters": {
         "authentication": "oAuth2",
         "resource": "file",
-        "operation": "createFromText",
-        "content": "={{ $('Validieren + CSV').item.json.metaContent }}",
-        "name": "={{ $('Validieren + CSV').item.json.metaName }}",
+        "operation": "upload",
+        "inputDataFieldName": "data",
+        "name": "={{ $json.fileName }}",
         "driveId": {
           "__rl": true,
           "mode": "list",
@@ -233,13 +292,15 @@
           "mode": "id",
           "value": "DRIVE_FOLDER_ID_META_PLACEHOLDER"
         },
-        "options": {}
+        "options": {
+          "simplifyOutput": true
+        }
       },
       "id": "drive-meta-001",
       "name": "Drive meta last-sync",
       "type": "n8n-nodes-base.googleDrive",
       "typeVersion": 3,
-      "position": [1760, 200],
+      "position": [2360, 200],
       "credentials": {
         "googleDriveOAuth2Api": {
           "id": "CREDENTIAL_ID_GOOGLE_DRIVE_PLACEHOLDER",
@@ -259,7 +320,7 @@
       "name": "200 OK",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1,
-      "position": [1980, 200]
+      "position": [2560, 200]
     }
   ],
   "connections": {
@@ -296,6 +357,17 @@
       "main": [
         [
           {
+            "node": "Binär aktuell JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Binär aktuell JSON": {
+      "main": [
+        [
+          {
             "node": "Drive aktuell JSON",
             "type": "main",
             "index": 0
@@ -304,6 +376,17 @@
       ]
     },
     "Drive aktuell JSON": {
+      "main": [
+        [
+          {
+            "node": "Binär aktuell CSV",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Binär aktuell CSV": {
       "main": [
         [
           {
@@ -329,6 +412,17 @@
       "main": [
         [
           {
+            "node": "Binär Archiv JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Binär Archiv JSON": {
+      "main": [
+        [
+          {
             "node": "Drive Archiv JSON",
             "type": "main",
             "index": 0
@@ -340,6 +434,17 @@
       "main": [
         [
           {
+            "node": "Binär Archiv CSV",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Binär Archiv CSV": {
+      "main": [
+        [
+          {
             "node": "Drive Archiv CSV",
             "type": "main",
             "index": 0
@@ -348,6 +453,17 @@
       ]
     },
     "Drive Archiv CSV": {
+      "main": [
+        [
+          {
+            "node": "Binär meta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Binär meta": {
       "main": [
         [
           {

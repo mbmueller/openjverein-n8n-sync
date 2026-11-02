@@ -101,7 +101,9 @@ Datei: [`n8n/einwilligung-bildnutzung.json`](n8n/einwilligung-bildnutzung.json)
 5. Workflow **aktivieren**; Production-URL (`/webhook/einwilligung-bildnutzung`, nicht `/webhook-test/…`) in lokale `.env` als `N8N_WEBHOOK_URL` übernehmen.
 6. Optional Secret: Env `N8N_WEBHOOK_SECRET` in n8n setzen **und** denselben Wert lokal. Leer / Platzhalter `CHANGE_ME_WEBHOOK_SECRET` = kein Check (Auth=None). Sonst Header `X-Webhook-Secret`.
 
-Hinweis: Drive-Nodes nutzen **Create From Text**. Jeder Sync kann in `aktuell/` eine weitere Datei gleichen Namens anlegen — nach dem ersten erfolgreichen Lauf alte Duplikate löschen oder später feste Datei-IDs verdrahten.
+Hinweis: Drive-Nodes nutzen **Upload** mit Binary-Feld `data`. Davor liegen kurze Code-Nodes (`Binär …`), die aus `Validieren + CSV` die passende Datei als `data` legen. Jeder Sync kann in `aktuell/` eine weitere Datei gleichen Namens anlegen — nach dem ersten erfolgreichen Lauf alte Duplikate löschen oder später feste Datei-IDs verdrahten.
+
+**Live-Fehler** `expects … binary file 'data', but none was found`: Drive-Node steht auf Upload ohne Binary-Vorgänger — Workflow aus diesem Repo neu importieren (nicht nur Credential tauschen).
 
 ### Bestehenden Live-Workflow ersetzen (z. B. `x8NZl6KCcVAphLWy` auf https://1648943.xyz/)
 
